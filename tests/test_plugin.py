@@ -1,17 +1,17 @@
 import polars as pl
 
-import fwf
+import polars_fwf as pfwf
 
 
 def test_native_polars():
     specs = [
-        fwf.FieldSpec("id", 0, 5, fwf.DType.I32),
-        fwf.FieldSpec("val", 5, 10, fwf.DType.F64),
-        fwf.FieldSpec("tag", 15, 5, fwf.DType.String),
+        pfwf.FieldSpec("id", 0, 5, pfwf.DType.I32),
+        pfwf.FieldSpec("val", 5, 10, pfwf.DType.F64),
+        pfwf.FieldSpec("tag", 15, 5, pfwf.DType.String),
     ]
 
     # Now calling directly via pl namespace
-    df = pl.read_fwf("data/test_data.fwf", specs, 21)
+    df = pl.read_fwf("data/test_data.fwf", specs)
 
     print("DataFrame via pl.read_fwf:")
     print(df)

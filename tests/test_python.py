@@ -1,14 +1,13 @@
 import os
 
-
-import fwf
+import polars_fwf as pfwf
 
 
 def test_read():
     specs = [
-        fwf.FieldSpec("id", 0, 5, fwf.DType.I32),
-        fwf.FieldSpec("val", 5, 10, fwf.DType.F64),
-        fwf.FieldSpec("tag", 15, 5, fwf.DType.String),
+        pfwf.FieldSpec("id", 0, 5, pfwf.DType.I32),
+        pfwf.FieldSpec("val", 5, 10, pfwf.DType.F64),
+        pfwf.FieldSpec("tag", 15, 5, pfwf.DType.String),
     ]
 
     # Use existing test data
@@ -20,7 +19,7 @@ def test_read():
                 "00001      1.23 ABC \n00002      4.56 DEF \n00003      7.89 GHI \n"
             )
 
-    df = fwf.read_fwf(path, specs, 21)
+    df = pfwf.read_fwf(path, specs)
     print("DataFrame:")
     print(df)
 
