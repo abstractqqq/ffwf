@@ -2,18 +2,33 @@ name: CI
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [main, master]
   pull_request:
-    branches: [ main, master ]
+    branches: [main, master]
+    types: [opened, synchronize, reopened, ready_for_review]
+
+# Cancel in-progress runs when a new push is made to the same branch/PR
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test:
     name: ${{ matrix.os }} / py-${{ matrix.python-version }}
+    # Only run if the PR is not a draft
+    if: github.event.pull_request.draft == false || github.event_name == 'push'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-13, macos-latest, windows-latest, ubuntu-24.04-arm]
+        os:
+          [
+            ubuntu-latest,
+            macos-13,
+            macos-latest,
+            windows-latest,
+            ubuntu-24.04-arm,
+          ]
         python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
 
     steps:
@@ -35,8 +50,7 @@ jobs:
 
       - name: Build and install
         run: |
-          # Use explicit maturin develop to build and install into the environment
-          # Adding native flags to squeeze performance
+          # Adding native flags to squeeze performance in tests
           export RUSTFLAGS="-C target-cpu=native"
           uv pip install maturin
           uv run maturin develop --release
@@ -45,5 +59,5 @@ jobs:
 
       - name: Run tests
         run: |
-          uv run pytest tests/test_python.py tests/test_nan.py
+          uv run pytest tests/test_python.py tests/test_plugin.py tests/test_nan.py tests/test_streaming.py
         shell: bash
