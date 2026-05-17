@@ -1,0 +1,18 @@
+[package]
+name = "fwf"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "fwf"
+crate-type = ["cdylib"]
+
+[dependencies]
+arrow-array = { version = "53", features = ["ffi"] }
+arrow-buffer = "53"
+arrow-schema = { version = "53", features = ["ffi"] }
+arrow-data = "53"
+lexical-core = "1.0"
+memmap2 = "0.9"
+rayon = "1.10"
+pyo3 = { version = "0.22", features = ["extension-module", "abi3-py39"] }

@@ -1,0 +1,23 @@
+[build-system]
+requires = ["maturin>=1.5,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "polars-fwf"
+version = "0.1.0"
+requires-python = ">=3.9"
+dependencies = [
+    "polars>=1.34",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pandas==2.2.3",
+    "matplotlib",
+    "polars[all]",
+    "pytest",
+]
+
+[tool.maturin]
+features = ["pyo3/extension-module"]
+module-name = "polars_fwf._fwf"
