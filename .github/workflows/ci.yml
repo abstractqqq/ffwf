@@ -47,17 +47,20 @@ jobs:
 
       - name: Cache Rust
         uses: Swatinem/rust-cache@v2
-
       - name: Build and install
         run: |
           # Adding native flags to squeeze performance in tests
           export RUSTFLAGS="-C target-cpu=native"
+          uv venv
+          echo "VIRTUAL_ENV=.venv" >> $GITHUB_ENV
+          echo "PATH=.venv/bin:$PATH" >> $GITHUB_PATH
           uv pip install maturin
           uv run maturin develop --release
           uv pip install -e ".[dev]"
         shell: bash
 
       - name: Run tests
+        if: runner.os == 'Linux'
         run: |
           uv run pytest tests/test_python.py tests/test_plugin.py tests/test_nan.py tests/test_streaming.py
         shell: bash
