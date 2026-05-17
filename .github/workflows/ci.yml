@@ -56,11 +56,11 @@ jobs:
           echo "PATH=.venv/bin:$PATH" >> $GITHUB_PATH
           uv pip install maturin
           uv run maturin develop --release
-          uv pip install -e ".[dev]"
         shell: bash
 
       - name: Run tests
         if: runner.os == 'Linux'
         run: |
+          uv pip install -e ".[dev]"
           uv run pytest tests/test_python.py tests/test_plugin.py tests/test_nan.py tests/test_streaming.py
         shell: bash
