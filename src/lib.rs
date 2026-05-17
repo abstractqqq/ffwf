@@ -123,11 +123,26 @@ impl PyFwfParser {
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("{e}")))
     }
 
+    #[staticmethod]
+    pub fn infer_chunk_size(specs: Vec<PyFieldSpec>) -> usize {
+        let core_specs: Vec<core::FieldSpec> = specs
+            .into_iter()
+            .map(|s| core::FieldSpec {
+                name: s.name,
+                offset: s.offset,
+                length: s.length,
+                dtype: s.dtype.into(),
+                padding: s.padding,
+            })
+            .collect();
+        core::FwfParser::infer_chunk_size(&core_specs)
+    }
+
     pub fn parse(&self, py: Python, data: &[u8]) -> PyResult<Vec<PyObject>> {
         let batches = self.inner.parse(data);
         let mut py_batches = Vec::with_capacity(batches.len());
         for batch in batches {
-            py_batches.push(self.record_batch_to_capsule(py, batch)?);
+            py_batches.push(record_batch_to_capsule(py, batch)?);
         }
         Ok(py_batches)
     }
@@ -139,7 +154,48 @@ impl PyFwfParser {
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("{e}")))?;
         let mut py_batches = Vec::with_capacity(batches.len());
         for batch in batches {
-            py_batches.push(self.record_batch_to_capsule(py, batch)?);
+            py_batches.push(record_batch_to_capsule(py, batch)?);
+        }
+        Ok(py_batches)
+    }
+}
+
+#[pyclass(name = "FwfReader")]
+pub struct PyFwfReader {
+    inner: core::FwfReader,
+}
+
+#[pymethods]
+impl PyFwfReader {
+    #[new]
+    #[pyo3(signature = (path, specs, line_length, parallel=None, chunk_size=None))]
+    pub fn new(
+        path: &str,
+        specs: Vec<PyFieldSpec>,
+        line_length: usize,
+        parallel: Option<bool>,
+        chunk_size: Option<usize>,
+    ) -> PyResult<Self> {
+        let core_specs = specs
+            .into_iter()
+            .map(|s| core::FieldSpec {
+                name: s.name,
+                offset: s.offset,
+                length: s.length,
+                dtype: s.dtype.into(),
+                padding: s.padding,
+            })
+            .collect();
+        let inner = core::FwfReader::new(path, core_specs, line_length, parallel, chunk_size)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("{e}")))?;
+        Ok(Self { inner })
+    }
+
+    pub fn next_burst(&mut self, py: Python) -> PyResult<Vec<PyObject>> {
+        let batches = self.inner.next_burst();
+        let mut py_batches = Vec::with_capacity(batches.len());
+        for batch in batches {
+            py_batches.push(record_batch_to_capsule(py, batch)?);
         }
         Ok(py_batches)
     }
@@ -159,39 +215,37 @@ unsafe extern "C" fn schema_destructor(capsule: *mut pyo3::ffi::PyObject) {
     }
 }
 
-impl PyFwfParser {
-    fn record_batch_to_capsule(&self, py: Python, batch: RecordBatch) -> PyResult<PyObject> {
-        let struct_array: StructArray = batch.into();
-        let array_data = struct_array.to_data();
+fn record_batch_to_capsule(py: Python, batch: RecordBatch) -> PyResult<PyObject> {
+    let struct_array: StructArray = batch.into();
+    let array_data = struct_array.to_data();
 
-        let ffi_array = FFI_ArrowArray::new(&array_data);
-        let ffi_schema = FFI_ArrowSchema::try_from(array_data.data_type())
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("{e}")))?;
+    let ffi_array = FFI_ArrowArray::new(&array_data);
+    let ffi_schema = FFI_ArrowSchema::try_from(array_data.data_type())
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("{e}")))?;
 
-        let array_ptr = Box::into_raw(Box::new(ffi_array));
-        let schema_ptr = Box::into_raw(Box::new(ffi_schema));
+    let array_ptr = Box::into_raw(Box::new(ffi_array));
+    let schema_ptr = Box::into_raw(Box::new(ffi_schema));
 
-        unsafe {
-            let array_capsule = pyo3::ffi::PyCapsule_New(
-                array_ptr as *mut _,
-                c"arrow_array".as_ptr(),
-                Some(array_destructor),
-            );
-            let schema_capsule = pyo3::ffi::PyCapsule_New(
-                schema_ptr as *mut _,
-                c"arrow_schema".as_ptr(),
-                Some(schema_destructor),
-            );
+    unsafe {
+        let array_capsule = pyo3::ffi::PyCapsule_New(
+            array_ptr as *mut _,
+            c"arrow_array".as_ptr(),
+            Some(array_destructor),
+        );
+        let schema_capsule = pyo3::ffi::PyCapsule_New(
+            schema_ptr as *mut _,
+            c"arrow_schema".as_ptr(),
+            Some(schema_destructor),
+        );
 
-            if array_capsule.is_null() || schema_capsule.is_null() {
-                return Err(PyErr::fetch(py));
-            }
-
-            let array_obj = PyObject::from_owned_ptr(py, array_capsule);
-            let schema_obj = PyObject::from_owned_ptr(py, schema_capsule);
-
-            Ok((array_obj, schema_obj).into_py(py))
+        if array_capsule.is_null() || schema_capsule.is_null() {
+            return Err(PyErr::fetch(py));
         }
+
+        let array_obj = PyObject::from_owned_ptr(py, array_capsule);
+        let schema_obj = PyObject::from_owned_ptr(py, schema_capsule);
+
+        Ok((array_obj, schema_obj).into_py(py))
     }
 }
 
@@ -200,5 +254,6 @@ fn _fwf(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyDType>()?;
     m.add_class::<PyFieldSpec>()?;
     m.add_class::<PyFwfParser>()?;
+    m.add_class::<PyFwfReader>()?;
     Ok(())
 }

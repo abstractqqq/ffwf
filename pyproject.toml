@@ -16,6 +16,7 @@ dev = [
     "matplotlib",
     "polars[all]",
     "pytest",
+    "psutil",
 ]
 
 [tool.maturin]

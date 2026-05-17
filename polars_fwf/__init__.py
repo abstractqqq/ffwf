@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Iterator
 import polars as pl
 from polars.io.plugins import register_io_source
 
-from ._fwf import DType, FieldSpec, FwfParser
+from ._fwf import DType, FieldSpec, FwfParser, FwfReader
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -97,26 +97,38 @@ class FwfSource:
         pl.DataFrame
             A Polars DataFrame containing the parsed batch.
         """
-        parser = FwfParser(list(self.specs), self.line_length, parallel=self.parallel)
-        if batch_size or self.chunk_size:
-            parser.set_chunk_size(batch_size or self.chunk_size)
+        reader = FwfReader(
+            self.path,
+            list(self.specs),
+            self.line_length,
+            parallel=self.parallel,
+            chunk_size=batch_size or self.chunk_size,
+        )
 
-        capsule_tuples = parser._parse_path(self.path)
+        count = 0
+        while True:
+            capsule_tuples = reader.next_burst()
+            if not capsule_tuples:
+                break
 
-        for capsules in capsule_tuples:
-            adapter = ArrowCapsule(capsules)
-            df = pl.from_arrow(adapter)
+            for capsules in capsule_tuples:
+                df = pl.from_arrow(ArrowCapsule(capsules))
 
-            if with_columns:
-                df = df.select(with_columns)
+                if with_columns:
+                    df = df.select(with_columns)
 
-            if n_rows is not None:
-                if n_rows <= 0:
-                    break
-                df = df.head(n_rows)
-                n_rows -= len(df)
+                if n_rows is not None:
+                    remaining = n_rows - count
+                    if remaining <= 0:
+                        return
+                    if len(df) > remaining:
+                        df = df.head(remaining)
 
-            yield df
+                count += len(df)
+                yield df
+
+                if n_rows is not None and count >= n_rows:
+                    return
 
 
 def read_fwf(
@@ -163,7 +175,23 @@ def read_fwf(
             f"must match data length ({actual_data_len})."
         )
 
-    return scan_fwf(path, specs, actual_stride, newline, chunk_size, parallel).collect()
+    # EAGER PATH: Use the optimized parallel parser for maximum throughput
+    parser = FwfParser(
+        list(specs),
+        actual_stride,
+        parallel=parallel,
+        chunk_size=chunk_size,
+    )
+
+    # _parse_path handles the mmap and multi-threading internally in one go
+    capsule_tuples = parser._parse_path(path)
+
+    if not capsule_tuples:
+        # Return empty frame with correct schema
+        return pl.DataFrame(schema={s.name: _dtype_to_pl(s.dtype) for s in specs})
+
+    dfs = [pl.from_arrow(ArrowCapsule(c)) for c in capsule_tuples]
+    return pl.concat(dfs, how="vertical")
 
 
 def scan_fwf(

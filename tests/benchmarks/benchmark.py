@@ -8,8 +8,6 @@ import polars.testing as pl_testing
 
 import polars_fwf as pfwf
 
-BIG_CHUNK = 256 * 1024
-
 
 def get_specs_and_widths():
     types_str = (
@@ -99,26 +97,19 @@ def run_test_set(filename, specs, widths, test_fn, title, chart_name):
     results["polars-fwf Eager (Par)"] = time.perf_counter() - start
     print(f"polars-fwf Eager (Par): {results['polars-fwf Eager (Par)']:.4f}s")
 
-    # 4. polars-fwf Lazy
+    # 4. polars-fwf Lazy (Seq)
     start = time.perf_counter()
-    test_fn(filename, specs, widths, mode="lazy")
-    results["polars-fwf Lazy"] = time.perf_counter() - start
-    print(f"polars-fwf Lazy: {results['polars-fwf Lazy']:.4f}s")
+    test_fn(filename, specs, widths, mode="lazy_seq")
+    results["polars-fwf Lazy (Seq)"] = time.perf_counter() - start
+    print(f"polars-fwf Lazy (Seq): {results['polars-fwf Lazy (Seq)']:.4f}s")
 
-    # 5. polars-fwf Lazy (Chunk=N)
+    # 5. polars-fwf Lazy (Par)
     start = time.perf_counter()
-    test_fn(filename, specs, widths, mode="lazy_chunk")
-    label_chunk = f"polars-fwf Lazy (Chunk={BIG_CHUNK})"
-    results[label_chunk] = time.perf_counter() - start
-    print(f"{label_chunk}: {results[label_chunk]:.4f}s")
+    test_fn(filename, specs, widths, mode="lazy_par")
+    results["polars-fwf Lazy (Par)"] = time.perf_counter() - start
+    print(f"polars-fwf Lazy (Par): {results['polars-fwf Lazy (Par)']:.4f}s")
 
-    # 6. polars-fwf Lazy (Par, Chunk=N)
-    start = time.perf_counter()
-    test_fn(filename, specs, widths, mode="lazy_par_chunk")
-    label_par_chunk = f"polars-fwf Lazy (Par, Chunk={BIG_CHUNK})"
-    results[label_par_chunk] = time.perf_counter() - start
-    print(f"{label_par_chunk}: {results[label_par_chunk]:.4f}s")
-
+    # Validation (only if eager_par and pandas returned frames)
     if title == "Pure Reading Benchmark":
         validate_dfs(res_pandas, res_custom)
 
@@ -138,16 +129,10 @@ def pure_reading_fn(filename, specs, widths, mode):
         return pfwf.read_fwf(filename, specs, parallel=False)
     elif mode == "eager_par":
         return pfwf.read_fwf(filename, specs, parallel=True)
-    elif mode == "lazy":
-        return pfwf.scan_fwf(filename, specs).collect()
-    elif mode == "lazy_chunk":
-        return pfwf.scan_fwf(
-            filename, specs, chunk_size=BIG_CHUNK, parallel=False
-        ).collect()
-    elif mode == "lazy_par_chunk":
-        return pfwf.scan_fwf(
-            filename, specs, chunk_size=BIG_CHUNK, parallel=True
-        ).collect()
+    elif mode == "lazy_seq":
+        return pfwf.scan_fwf(filename, specs, parallel=False).collect()
+    elif mode == "lazy_par":
+        return pfwf.scan_fwf(filename, specs, parallel=True).collect()
 
 
 def pipeline_fn(filename, specs, widths, mode):
@@ -171,23 +156,16 @@ def pipeline_fn(filename, specs, widths, mode):
     elif mode == "eager_par":
         df = pfwf.read_fwf(filename, specs, parallel=True)
         return apply_pipeline(df)
-    elif mode == "lazy":
+    elif mode == "lazy_seq":
         return (
-            pfwf.scan_fwf(filename, specs)
+            pfwf.scan_fwf(filename, specs, parallel=False)
             .filter((pl.col("state") == "NY") & (pl.col("col_30") > 10**15))
             .select(["state", "col_30", "col_120"])
             .collect()
         )
-    elif mode == "lazy_chunk":
+    elif mode == "lazy_par":
         return (
-            pfwf.scan_fwf(filename, specs, chunk_size=BIG_CHUNK, parallel=False)
-            .filter((pl.col("state") == "NY") & (pl.col("col_30") > 10**15))
-            .select(["state", "col_30", "col_120"])
-            .collect()
-        )
-    elif mode == "lazy_par_chunk":
-        return (
-            pfwf.scan_fwf(filename, specs, chunk_size=BIG_CHUNK, parallel=True)
+            pfwf.scan_fwf(filename, specs, parallel=True)
             .filter((pl.col("state") == "NY") & (pl.col("col_30") > 10**15))
             .select(["state", "col_30", "col_120"])
             .collect()
@@ -224,9 +202,9 @@ def aggregation_fn(filename, specs, widths, mode):
     elif mode == "eager_par":
         df = pfwf.read_fwf(filename, specs, parallel=True)
         return apply_agg(df)
-    elif mode == "lazy":
+    elif mode == "lazy_seq":
         return (
-            pfwf.scan_fwf(filename, specs)
+            pfwf.scan_fwf(filename, specs, parallel=False)
             .filter(pl.col("col_30") > 10**14)
             .group_by("state")
             .agg(
@@ -237,22 +215,9 @@ def aggregation_fn(filename, specs, widths, mode):
             )
             .collect()
         )
-    elif mode == "lazy_chunk":
+    elif mode == "lazy_par":
         return (
-            pfwf.scan_fwf(filename, specs, chunk_size=BIG_CHUNK, parallel=False)
-            .filter(pl.col("col_30") > 10**14)
-            .group_by("state")
-            .agg(
-                [
-                    pl.col("col_120").min().alias("min"),
-                    pl.col("col_120").max().alias("max"),
-                ]
-            )
-            .collect()
-        )
-    elif mode == "lazy_par_chunk":
-        return (
-            pfwf.scan_fwf(filename, specs, chunk_size=BIG_CHUNK, parallel=True)
+            pfwf.scan_fwf(filename, specs, parallel=True)
             .filter(pl.col("col_30") > 10**14)
             .group_by("state")
             .agg(
@@ -272,7 +237,7 @@ def plot_results(results, title, filename):
     normalized = [v / baseline for v in values]
 
     plt.figure(figsize=(14, 8))
-    colors = ["gray", "lightblue", "blue", "lightgreen", "green", "orange"]
+    colors = ["gray", "lightblue", "blue", "lightgreen", "green"]
     bars = plt.bar(names, normalized, color=colors[: len(names)])
     plt.axhline(1.0, color="red", linestyle="--", label="Pandas Baseline")
     plt.ylabel("Time (Normalized to Pandas)")

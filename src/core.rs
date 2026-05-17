@@ -381,3 +381,70 @@ pub fn trim_custom(slice: &[u8], padding: Option<u8>) -> &[u8] {
         }
     }
 }
+
+pub struct FwfReader {
+    mmap: Mmap,
+    parser: FwfParser,
+    offset: usize,
+    burst_size: usize,
+}
+
+impl FwfReader {
+    pub fn new(
+        path: &str,
+        specs: Vec<FieldSpec>,
+        line_length: usize,
+        parallel: Option<bool>,
+        chunk_size: Option<usize>,
+    ) -> std::io::Result<Self> {
+        let file = File::open(path)?;
+        let mmap = unsafe { Mmap::map(&file)? };
+        let mut parser = FwfParser::new(specs, line_length);
+
+        let mut burst = 1;
+        if let Some(p) = parallel {
+            parser.parallelism = if p {
+                burst = rayon::current_num_threads().max(1);
+                Par::Fixed(0)
+            } else {
+                Par::Seq
+            };
+        }
+
+        if let Some(c) = chunk_size {
+            parser.chunk_size = c;
+        }
+
+        Ok(Self {
+            mmap,
+            parser,
+            offset: 0,
+            burst_size: burst,
+        })
+    }
+
+    pub fn next_burst(&mut self) -> Vec<RecordBatch> {
+        if self.offset >= self.mmap.len() {
+            return vec![];
+        }
+
+        let batch_bytes = self.parser.chunk_size * self.parser.line_length;
+        let burst_bytes = batch_bytes * self.burst_size;
+
+        let end = (self.offset + burst_bytes).min(self.mmap.len());
+
+        let actual_end = if end == self.mmap.len() {
+            end
+        } else {
+            self.offset + ((end - self.offset) / self.parser.line_length) * self.parser.line_length
+        };
+
+        if actual_end <= self.offset {
+            return vec![];
+        }
+
+        let batches = self.parser.parse(&self.mmap[self.offset..actual_end]);
+        self.offset = actual_end;
+        batches
+    }
+}

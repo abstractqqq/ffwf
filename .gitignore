@@ -21,9 +21,7 @@ dist/
 htmlcov/
 
 # Local data & benchmarks
-data/large_bench.fwf
-data/streaming_test.fwf
-data/nan_test.fwf
+data/*.fwf
 plots/*.png
 
 # IDEs & OS
