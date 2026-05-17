@@ -82,6 +82,10 @@ uv pip install -e ".[dev]"
 RUSTFLAGS="-C target-cpu=native" maturin develop --release
 ```
 
+## Other Projects
+
+1. My Data Science Extension to Polars [Polars DS](https://github.com/abstractqqq/polars_ds_extension)
+
 ## AI Assistance Disclosure
 
 This project uses AI-assisted development with Gemini.
