@@ -9,6 +9,7 @@ While formats like CSV are more common, Fixed-Width Files (FWF) provide a more r
 - **Structural Integrity**: Unlike CSV, FWF is immune to "delimiter collision" and "quote hell." Comma, quotes, or newlines within a field cannot break the physical layout of the file.
 - **Predictable Performance**: Because column positions are known at the byte level, parsers can slice data with near-zero overhead.
 - **Consistency**: The fixed schema ensures that if a spec defines a column as 10 bytes, it remains 10 bytes. This prevents the "silent misalignment" often caused by poorly escaped CSVs.
+- **Speed**: Parsing FWF files is faster than CSV due to the fixed schema and lack of delimiters.
 
 `polars-fwf` brings the reliability of these legacy contracts into the modern Polars ecosystem with native-speed parsing.
 
