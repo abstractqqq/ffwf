@@ -14,9 +14,8 @@ dependencies = [
 dev = [
     "pandas==2.2.3",
     "matplotlib",
-    "polars[all]",
+    "pyarrow",
     "pytest",
-    "psutil",
 ]
 
 [tool.maturin]
