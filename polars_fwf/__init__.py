@@ -474,7 +474,9 @@ def write_fwf(
         skip_width_check=skip_width_check,
     )
 
-    batch_out.write_csv(path, include_header=False, quote_style="never")
+    batch_out.write_csv(
+        path, include_header=False, quote_style="never", line_terminator="\n"
+    )
 
     return _build_spec_map(final_specs, df.schema, simple_dtypes)
 
@@ -566,10 +568,12 @@ def sink_fwf(
                     f"Batch {i} (rows {current_row} - {current_row + len(batch) - 1}) failed validation: {e}"
                 ) from e
 
-            batch_out.write_csv(f, include_header=False, quote_style="never")
+            batch_out.write_csv(
+                f, include_header=False, quote_style="never", line_terminator="\n"
+            )
             current_row += len(batch)
 
-    return _build_spec_map(final_specs, lf.schema, simple_dtypes)
+    return _build_spec_map(final_specs, lf.collect_schema(), simple_dtypes)
 
 
 class ArrowCapsule:

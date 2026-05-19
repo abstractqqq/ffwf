@@ -12,12 +12,12 @@ def test_nan_handling():
     path = "data/nan_test.fwf"
     os.makedirs("data", exist_ok=True)
 
-    with open(path, "w") as f:
-        f.write("      1.23\n")
-        f.write("       NaN\n")
-        f.write("      4.56\n")
-        f.write("       inf\n")
-        f.write("      NULL\n")
+    with open(path, "wb") as f:
+        f.write(b"      1.23\n")
+        f.write(b"       NaN\n")
+        f.write(b"      4.56\n")
+        f.write(b"       inf\n")
+        f.write(b"      NULL\n")
 
     print(f"Reading {path} with F64 spec...")
     df = pfwf.read_fwf(path, specs)

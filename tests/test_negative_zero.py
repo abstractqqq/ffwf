@@ -10,9 +10,9 @@ import polars_fwf as pfwf
 def test_negative_zero_handling(tmp_path):
     # 1. Prepare FWF data with negative zeros
     # int col: "-0", float col: "-0.0"
-    content = "-0-0.0\n"
+    content = b"-0-0.0\n"
     path = str(tmp_path / "neg_zero.fwf")
-    with open(path, "w") as f:
+    with open(path, "wb") as f:
         f.write(content)
 
     specs = [pfwf.FieldSpec("i", 0, 2, "int"), pfwf.FieldSpec("f", 2, 4, "float")]
