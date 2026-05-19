@@ -6,12 +6,12 @@ import polars as pl
 import polars.selectors as cs
 from polars.io.plugins import register_io_source
 
-from ._fwf import DType, FwfParser, FwfReader, _FieldSpec
+from ._fwf import DType, FwfParser, FwfReader, PyFieldSpec
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-    from ._fwf import _FieldSpec as FieldSpec
+    from ._fwf import PyFieldSpec as FieldSpec
 
 __all__ = [
     "FwfParser",
@@ -30,7 +30,7 @@ def FieldSpec(
     length: int,
     dtype: DType | str,
     padding: int | None = None,
-) -> _FieldSpec:
+) -> PyFieldSpec:
     """
     Define a field specification for a fixed-width file.
 
@@ -50,7 +50,7 @@ def FieldSpec(
 
     Returns
     -------
-    _FieldSpec
+    PyFieldSpec
         An internal field specification object.
     """
     if isinstance(dtype, str):
@@ -79,7 +79,7 @@ def FieldSpec(
             dtype = DType.F64
         else:
             raise ValueError(f"Unknown DType alias: {dtype}")
-    return _FieldSpec(name, offset, length, dtype, padding)
+    return PyFieldSpec(name, offset, length, dtype, padding)
 
 
 def _check_supported_types(df_or_lf: pl.DataFrame | pl.LazyFrame):
@@ -109,13 +109,13 @@ def _check_supported_types(df_or_lf: pl.DataFrame | pl.LazyFrame):
         raise TypeError(f"Unsupported column type(s) for FWF: {unsupported_schema}")
 
 
-def _check_specs_contiguity(specs: Sequence[_FieldSpec]):
+def _check_specs_contiguity(specs: Sequence[PyFieldSpec]):
     """
     Ensure the provided field specifications are contiguous and start at offset 0.
 
     Parameters
     ----------
-    specs : Sequence[_FieldSpec]
+    specs : Sequence[PyFieldSpec]
         The specifications to validate.
 
     Raises
@@ -166,7 +166,7 @@ def _infer_specs(
     bool_treatment: tuple[str, str, str],
     max_decimals: int,
     infer_specs_rows: int | None = None,
-) -> Sequence[_FieldSpec]:
+) -> Sequence[PyFieldSpec]:
     """
     Automatically infer column widths and types from the data.
 
@@ -183,7 +183,7 @@ def _infer_specs(
 
     Returns
     -------
-    Sequence[_FieldSpec]
+    Sequence[PyFieldSpec]
         The inferred field specifications.
     """
     schema = df_or_lf.collect_schema()
@@ -256,12 +256,13 @@ def _infer_specs(
 
 def _validate_and_format_batch(
     df: pl.DataFrame,
-    specs: Sequence[_FieldSpec],
+    specs: Sequence[PyFieldSpec],
     max_decimals: int,
     bool_treatment: tuple[str, str, str],
     number_padding: str,
     str_padding: str,
     pad_str_end: bool,
+    skip_width_check: bool = False,
 ) -> pl.DataFrame:
     """
     Transform and validate a single batch of data for FWF writing.
@@ -270,7 +271,7 @@ def _validate_and_format_batch(
     ----------
     df : pl.DataFrame
         The batch of data.
-    specs : Sequence[_FieldSpec]
+    specs : Sequence[PyFieldSpec]
         The layout specification.
     max_decimals : int
         Decimal precision for float truncation.
@@ -282,6 +283,8 @@ def _validate_and_format_batch(
         Character for string padding.
     pad_str_end : bool
         Alignment for string columns.
+    skip_width_check : bool
+        Whether to skip checking if data fits in specified widths.
 
     Returns
     -------
@@ -307,13 +310,7 @@ def _validate_and_format_batch(
                 .otherwise(pl.lit(bool_treatment[1]))
             )
         elif dtype.is_float():
-            # String-based truncation to avoid overflow
-            col = col.cast(pl.String)
-            if max_decimals > 0:
-                pattern = r"(\.\d{" + str(max_decimals) + r"})\d+"
-                col = col.str.replace(pattern, r"$1")
-            elif max_decimals == 0:
-                col = col.str.replace(r"\.\d+", "")
+            col = col.truncate(max_decimals)
         elif dtype == pl.String or isinstance(dtype, (pl.Categorical, pl.Enum)):
             # Strip quotes
             col = col.cast(pl.String).str.replace_all(r"[\"']", "")
@@ -323,13 +320,18 @@ def _validate_and_format_batch(
 
     temp_df = df.select(exprs)
 
-    # Validate lengths
-    for spec in specs:
-        m_len = temp_df[f"_tmp_{spec.name}"].str.len_bytes().max() or 0
-        if m_len > spec.length:
-            raise ValueError(
-                f"Column '{spec.name}' has data longer ({m_len}) than specified length ({spec.length})"
-            )
+    # Validate lengths in parallel if not skipped
+    if not skip_width_check:
+        max_lens = temp_df.select(pl.all().str.len_bytes().max()).row(0)
+
+        violations = [
+            f"Column '{spec.name}' has data longer ({max_len or 0}) than specified length ({spec.length})"
+            for spec, max_len in zip(specs, max_lens)
+            if (max_len or 0) > spec.length
+        ]
+
+        if violations:
+            raise ValueError("\n".join(violations))
 
     # Pad and Concat
     final_exprs = []
@@ -349,14 +351,14 @@ def _validate_and_format_batch(
 
 
 def _build_spec_map(
-    specs: Sequence[_FieldSpec], schema: pl.Schema, simple_dtypes: bool
+    specs: Sequence[PyFieldSpec], schema: pl.Schema, simple_dtypes: bool
 ) -> dict[str, dict]:
     """
     Construct the final specification dictionary returned to the user.
 
     Parameters
     ----------
-    specs : Sequence[_FieldSpec]
+    specs : Sequence[PyFieldSpec]
         The active specifications.
     schema : pl.Schema
         The Polars schema (used for bool type check).
@@ -393,7 +395,7 @@ def _build_spec_map(
 def write_fwf(
     df: pl.DataFrame | pl.LazyFrame,
     path: str,
-    specs: Sequence[_FieldSpec] | None = None,
+    specs: Sequence[PyFieldSpec] | None = None,
     number_padding: str = " ",
     str_padding: str = " ",
     pad_str_end: bool = True,
@@ -446,6 +448,7 @@ def write_fwf(
     _check_supported_types(df)
     bool_treatment = _validate_bool_treatment(bool_treatment)
 
+    skip_width_check = False
     if specs is not None:
         _check_specs_contiguity(specs)
         target_cols = [s.name for s in specs]
@@ -458,6 +461,7 @@ def write_fwf(
         final_specs = _infer_specs(df, bool_treatment, max_decimals)
         if isinstance(df, pl.LazyFrame):
             df = df.collect()
+        skip_width_check = True
 
     batch_out = _validate_and_format_batch(
         df,
@@ -467,6 +471,7 @@ def write_fwf(
         number_padding,
         str_padding,
         pad_str_end,
+        skip_width_check=skip_width_check,
     )
 
     batch_out.write_csv(path, include_header=False, quote_style="never")
@@ -477,7 +482,7 @@ def write_fwf(
 def sink_fwf(
     lf: pl.LazyFrame,
     path: str,
-    specs: Sequence[_FieldSpec] | None = None,
+    specs: Sequence[PyFieldSpec] | None = None,
     number_padding: str = " ",
     str_padding: str = " ",
     pad_str_end: bool = True,
@@ -531,6 +536,7 @@ def sink_fwf(
     _check_supported_types(lf)
     bool_treatment = _validate_bool_treatment(bool_treatment)
 
+    skip_width_check = False
     if specs is not None:
         _check_specs_contiguity(specs)
         lf = lf.select([s.name for s in specs])
@@ -539,6 +545,7 @@ def sink_fwf(
         final_specs = _infer_specs(
             lf, bool_treatment, max_decimals, infer_specs_rows=infer_specs_rows
         )
+        skip_width_check = True
 
     current_row = 0
     with open(path, "wb") as f:
@@ -552,6 +559,7 @@ def sink_fwf(
                     number_padding,
                     str_padding,
                     pad_str_end,
+                    skip_width_check=skip_width_check,
                 )
             except ValueError as e:
                 raise ValueError(

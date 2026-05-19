@@ -129,7 +129,7 @@ def test_sink_fwf_batch_validation(tmp_path):
 
 def test_write_fwf_large_floats(tmp_path):
     path = str(tmp_path / "large_floats.fwf")
-    # Huge float that would overflow (val * 10^n) if using numeric truncation
+    # Huge float
     df = pl.DataFrame({"val": [1.23456789e300, 1.23456789e-10]})
 
     # Test with 2 decimals
@@ -137,11 +137,73 @@ def test_write_fwf_large_floats(tmp_path):
 
     with open(path, "r") as f:
         lines = f.readlines()
-        # Polars string representation for 1e300 usually has 'e300'
-        # Our regex truncation should preserve the 'e300' part if it matched
-        # Let's check what actually happened
+        # Polars truncate(2) should result in 1.23e300
         assert "1.23" in lines[0]
         assert "0.0" in lines[1]  # 1.2e-10 truncated to 2 decimals is 0.0
+
+
+def test_write_fwf_float_width_validation(tmp_path):
+    path = str(tmp_path / "width_fail.fwf")
+    # Large float that exceeds width 5 even after truncation
+    df = pl.DataFrame({"val": [1.23456789e10]})
+    specs = [pfwf.FieldSpec("val", 0, 5, "f64")]
+
+    with pytest.raises(ValueError, match="has data longer"):
+        pfwf.write_fwf(df, path, specs=specs, max_decimals=2)
+
+
+def test_write_fwf_nan_inf(tmp_path):
+    path = str(tmp_path / "nan_inf.fwf")
+    df = pl.DataFrame({"val": [float("nan"), float("inf")]})
+    specs = [pfwf.FieldSpec("val", 0, 10, "f64")]
+    pfwf.write_fwf(df, path, specs=specs)
+
+    with open(path, "r") as f:
+        lines = f.readlines()
+        assert "NaN" in lines[0]
+        assert "inf" in lines[1]
+
+
+def test_write_fwf_truncation_logic(tmp_path):
+    path = str(tmp_path / "trunc.fwf")
+    # 1.999 truncated to 1 decimal should be 1.9, NOT 2.0
+    df = pl.DataFrame({"val": [1.999]})
+    specs = [pfwf.FieldSpec("val", 0, 5, "f64")]
+    pfwf.write_fwf(df, path, specs=specs, max_decimals=1)
+
+    with open(path, "r") as f:
+        line = f.read().rstrip("\n")
+        assert line == "  1.9"
+
+
+def test_write_fwf_truncation_zero_decimals(tmp_path):
+    path = str(tmp_path / "trunc0.fwf")
+    df = pl.DataFrame({"val": [1.99, -1.99]})
+
+    specs = [pfwf.FieldSpec("val", 0, 10, "f64")]
+    pfwf.write_fwf(df, path, specs=specs, max_decimals=0)
+
+    with open(path, "r") as f:
+        lines = f.readlines()
+        # Truncating 1.99 to 0 decimals should be 1.0 or 1
+        assert "1.0" in lines[0] or "1" in lines[0]
+        assert "-1.0" in lines[1] or "-1" in lines[1]
+        assert "2" not in lines[0]
+
+
+def test_write_fwf_f32_bounds(tmp_path):
+    path = str(tmp_path / "f32_bounds.fwf")
+    # Value that fits in f64 but not f32 (approx 1e38)
+    df = pl.DataFrame({"val": [1e40]})
+
+    # Spec says f32, but we only validate width now
+    specs = [pfwf.FieldSpec("val", 0, 20, "f32")]
+    pfwf.write_fwf(df, path, specs=specs)
+
+    with open(path, "r") as f:
+        line = f.read().strip()
+        # Polars might format as 1e+40 or 1e40 depending on version/context
+        assert "1e" in line.lower() and "40" in line
 
 
 def test_write_fwf_negatives(tmp_path):

@@ -57,7 +57,7 @@ impl From<PyDType> for core::DType {
     }
 }
 
-#[pyclass(name = "_FieldSpec")]
+#[pyclass(name = "PyFieldSpec")]
 #[derive(Debug, Clone)]
 pub struct PyFieldSpec {
     #[pyo3(get, set)]
