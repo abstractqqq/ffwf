@@ -10,14 +10,11 @@ def test_read():
         pfwf.FieldSpec("tag", 15, 5, pfwf.DType.String),
     ]
 
-    # Use existing test data
+    # Ensure test data is written with LF (\n)
     path = "data/test_data.fwf"
-    if not os.path.exists(path):
-        os.makedirs("data", exist_ok=True)
-        with open(path, "wb") as f:
-            f.write(
-                b"00001      1.23 ABC \n00002      4.56 DEF \n00003      7.89 GHI \n"
-            )
+    os.makedirs("data", exist_ok=True)
+    with open(path, "wb") as f:
+        f.write(b"00001      1.23 ABC \n00002      4.56 DEF \n00003      7.89 GHI \n")
 
     df = pfwf.read_fwf(path, specs)
     print("DataFrame:")

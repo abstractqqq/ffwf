@@ -1,0 +1,2 @@
+*.fwf text eol=lf
+tests/** linguist-documentation=true
