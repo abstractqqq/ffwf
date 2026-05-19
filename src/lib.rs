@@ -37,6 +37,11 @@ impl PyDType {
             PyDType::String => "String",
         }
     }
+
+    fn max_width(&self) -> Option<usize> {
+        let core_dtype: core::DType = (*self).into();
+        core_dtype.max_width()
+    }
 }
 
 impl From<PyDType> for core::DType {

@@ -50,6 +50,20 @@ impl DType {
             DType::String => DataType::Utf8View,
         }
     }
+
+    pub fn max_width(&self) -> Option<usize> {
+        match self {
+            DType::I8 => Some(4),
+            DType::U8 => Some(3),
+            DType::I16 => Some(6),
+            DType::U16 => Some(5),
+            DType::I32 => Some(11),
+            DType::U32 => Some(10),
+            DType::I64 => Some(20),
+            DType::U64 => Some(20),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -198,120 +212,58 @@ impl FwfParser {
             })
             .collect::<Vec<_>>();
 
-        for (spec, builder) in self.specs.iter().zip(builders.iter_mut()) {
-            let start = spec.offset;
-            let end = spec.offset + spec.length;
-            let padding = spec.padding;
-            match builder {
-                ColumnBuilder::I8(b) => {
-                    for row_idx in 0..num_rows {
-                        let row_start = row_idx * self.line_length;
-                        let field = trim_custom(&data[row_start + start..row_start + end], padding);
-                        match lexical_core::parse::<i8>(field) {
-                            Ok(v) => b.append_value(v),
-                            Err(_) => b.append_null(),
-                        }
-                    }
-                }
-                ColumnBuilder::I16(b) => {
-                    for row_idx in 0..num_rows {
-                        let row_start = row_idx * self.line_length;
-                        let field = trim_custom(&data[row_start + start..row_start + end], padding);
-                        match lexical_core::parse::<i16>(field) {
-                            Ok(v) => b.append_value(v),
-                            Err(_) => b.append_null(),
-                        }
-                    }
-                }
-                ColumnBuilder::I32(b) => {
-                    for row_idx in 0..num_rows {
-                        let row_start = row_idx * self.line_length;
-                        let field = trim_custom(&data[row_start + start..row_start + end], padding);
-                        match lexical_core::parse::<i32>(field) {
-                            Ok(v) => b.append_value(v),
-                            Err(_) => b.append_null(),
-                        }
-                    }
-                }
-                ColumnBuilder::I64(b) => {
-                    for row_idx in 0..num_rows {
-                        let row_start = row_idx * self.line_length;
-                        let field = trim_custom(&data[row_start + start..row_start + end], padding);
-                        match lexical_core::parse::<i64>(field) {
-                            Ok(v) => b.append_value(v),
-                            Err(_) => b.append_null(),
-                        }
-                    }
-                }
-                ColumnBuilder::U8(b) => {
-                    for row_idx in 0..num_rows {
-                        let row_start = row_idx * self.line_length;
-                        let field = trim_custom(&data[row_start + start..row_start + end], padding);
-                        match lexical_core::parse::<u8>(field) {
-                            Ok(v) => b.append_value(v),
-                            Err(_) => b.append_null(),
-                        }
-                    }
-                }
-                ColumnBuilder::U16(b) => {
-                    for row_idx in 0..num_rows {
-                        let row_start = row_idx * self.line_length;
-                        let field = trim_custom(&data[row_start + start..row_start + end], padding);
-                        match lexical_core::parse::<u16>(field) {
-                            Ok(v) => b.append_value(v),
-                            Err(_) => b.append_null(),
-                        }
-                    }
-                }
-                ColumnBuilder::U32(b) => {
-                    for row_idx in 0..num_rows {
-                        let row_start = row_idx * self.line_length;
-                        let field = trim_custom(&data[row_start + start..row_start + end], padding);
-                        match lexical_core::parse::<u32>(field) {
-                            Ok(v) => b.append_value(v),
-                            Err(_) => b.append_null(),
-                        }
-                    }
-                }
-                ColumnBuilder::U64(b) => {
-                    for row_idx in 0..num_rows {
-                        let row_start = row_idx * self.line_length;
-                        let field = trim_custom(&data[row_start + start..row_start + end], padding);
-                        match lexical_core::parse::<u64>(field) {
-                            Ok(v) => b.append_value(v),
-                            Err(_) => b.append_null(),
-                        }
-                    }
-                }
-                ColumnBuilder::F32(b) => {
-                    for row_idx in 0..num_rows {
-                        let row_start = row_idx * self.line_length;
-                        let field = trim_custom(&data[row_start + start..row_start + end], padding);
-                        match lexical_core::parse::<f32>(field) {
-                            Ok(v) => b.append_value(v),
-                            Err(_) => b.append_null(),
-                        }
-                    }
-                }
-                ColumnBuilder::F64(b) => {
-                    for row_idx in 0..num_rows {
-                        let row_start = row_idx * self.line_length;
-                        let field = trim_custom(&data[row_start + start..row_start + end], padding);
-                        match lexical_core::parse::<f64>(field) {
-                            Ok(v) => b.append_value(v),
-                            Err(_) => b.append_null(),
-                        }
-                    }
-                }
-                ColumnBuilder::String(b) => {
-                    for row_idx in 0..num_rows {
-                        let row_start = row_idx * self.line_length;
-                        let field = trim_custom(&data[row_start + start..row_start + end], padding);
-                        match std::str::from_utf8(field) {
-                            Ok(v) => b.append_value(v),
-                            Err(_) => b.append_null(),
-                        }
-                    }
+        for row_idx in 0..num_rows {
+            let row_start = row_idx * self.line_length;
+            for (spec, builder) in self.specs.iter().zip(builders.iter_mut()) {
+                let start = row_start + spec.offset;
+                let end = start + spec.length;
+                let field = trim_custom(&data[start..end], spec.padding);
+
+                match builder {
+                    ColumnBuilder::I8(b) => match lexical_core::parse::<i8>(field) {
+                        Ok(v) => b.append_value(v),
+                        Err(_) => b.append_null(),
+                    },
+                    ColumnBuilder::I16(b) => match lexical_core::parse::<i16>(field) {
+                        Ok(v) => b.append_value(v),
+                        Err(_) => b.append_null(),
+                    },
+                    ColumnBuilder::I32(b) => match lexical_core::parse::<i32>(field) {
+                        Ok(v) => b.append_value(v),
+                        Err(_) => b.append_null(),
+                    },
+                    ColumnBuilder::I64(b) => match lexical_core::parse::<i64>(field) {
+                        Ok(v) => b.append_value(v),
+                        Err(_) => b.append_null(),
+                    },
+                    ColumnBuilder::U8(b) => match lexical_core::parse::<u8>(field) {
+                        Ok(v) => b.append_value(v),
+                        Err(_) => b.append_null(),
+                    },
+                    ColumnBuilder::U16(b) => match lexical_core::parse::<u16>(field) {
+                        Ok(v) => b.append_value(v),
+                        Err(_) => b.append_null(),
+                    },
+                    ColumnBuilder::U32(b) => match lexical_core::parse::<u32>(field) {
+                        Ok(v) => b.append_value(v),
+                        Err(_) => b.append_null(),
+                    },
+                    ColumnBuilder::U64(b) => match lexical_core::parse::<u64>(field) {
+                        Ok(v) => b.append_value(v),
+                        Err(_) => b.append_null(),
+                    },
+                    ColumnBuilder::F32(b) => match lexical_core::parse::<f32>(field) {
+                        Ok(v) => b.append_value(v),
+                        Err(_) => b.append_null(),
+                    },
+                    ColumnBuilder::F64(b) => match lexical_core::parse::<f64>(field) {
+                        Ok(v) => b.append_value(v),
+                        Err(_) => b.append_null(),
+                    },
+                    ColumnBuilder::String(b) => match std::str::from_utf8(field) {
+                        Ok(v) => b.append_value(v),
+                        Err(_) => b.append_null(),
+                    },
                 }
             }
         }

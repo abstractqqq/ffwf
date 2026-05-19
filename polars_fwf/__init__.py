@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.metadata
+import warnings
 from typing import TYPE_CHECKING, Any, Iterator
 
 import polars as pl
@@ -63,30 +64,46 @@ def FieldSpec(
     if isinstance(dtype, str):
         dtype_lower = dtype.lower()
         if dtype_lower in ("str", "string"):
-            dtype = DType.String
+            resolved_dtype = DType.String
         elif dtype_lower in ("int", "integer", "i32"):
-            dtype = DType.I32
+            resolved_dtype = DType.I32
         elif dtype_lower == "i8":
-            dtype = DType.I8
+            resolved_dtype = DType.I8
         elif dtype_lower == "i16":
-            dtype = DType.I16
+            resolved_dtype = DType.I16
         elif dtype_lower == "i64":
-            dtype = DType.I64
+            resolved_dtype = DType.I64
         elif dtype_lower == "u8":
-            dtype = DType.U8
+            resolved_dtype = DType.U8
         elif dtype_lower == "u16":
-            dtype = DType.U16
+            resolved_dtype = DType.U16
         elif dtype_lower == "u32":
-            dtype = DType.U32
+            resolved_dtype = DType.U32
         elif dtype_lower == "u64":
-            dtype = DType.U64
+            resolved_dtype = DType.U64
         elif dtype_lower in ("f32", "float"):
-            dtype = DType.F32
+            resolved_dtype = DType.F32
         elif dtype_lower in ("f64", "double"):
-            dtype = DType.F64
+            resolved_dtype = DType.F64
         else:
             raise ValueError(f"Unknown DType alias: {dtype}")
-    return PyFieldSpec(name, offset, length, dtype, padding)
+    else:
+        resolved_dtype = dtype
+
+    if length <= 0:
+        raise ValueError(f"FieldSpec width must be positive, got {length}")
+
+    # Integer width capacity validation
+    max_w = resolved_dtype.max_width()
+    if max_w is not None and length > max_w:
+        warnings.warn(
+            f"Width {length} exceeds maximum capacity for {resolved_dtype} "
+            f"(max {max_w} characters). This may cause overflow or parsing errors.",
+            UserWarning,
+            stacklevel=2,
+        )
+
+    return PyFieldSpec(name, offset, length, resolved_dtype, padding)
 
 
 def _check_supported_types(df_or_lf: pl.DataFrame | pl.LazyFrame):
@@ -140,6 +157,21 @@ def _check_specs_contiguity(specs: Sequence[PyFieldSpec]):
         if prev.offset + prev.length != curr.offset:
             raise ValueError(
                 f"Specs are not contiguous between {prev.name} and {curr.name}"
+            )
+
+
+def _check_specs_capacity(specs: Sequence[PyFieldSpec]):
+    """
+    Check if any FieldSpec width exceeds the maximum capacity of its type and warn.
+    """
+    for s in specs:
+        max_w = s.dtype.max_width()
+        if max_w is not None and s.length > max_w:
+            warnings.warn(
+                f"Column '{s.name}' with type {s.dtype} has width {s.length} "
+                f"which exceeds maximum capacity ({max_w} characters).",
+                UserWarning,
+                stacklevel=3,
             )
 
 
@@ -332,9 +364,9 @@ def _validate_and_format_batch(
         max_lens = temp_df.select(pl.all().str.len_bytes().max()).row(0)
 
         violations = [
-            f"Column '{spec.name}' has data longer ({max_len or 0}) than specified length ({spec.length})"
-            for spec, max_len in zip(specs, max_lens)
-            if (max_len or 0) > spec.length
+            f"Column '{s.name}' has data longer ({max_len or 0}) than specified length ({s.length})"
+            for s, max_len in zip(specs, max_lens)
+            if (max_len or 0) > s.length
         ]
 
         if violations:
@@ -458,6 +490,7 @@ def write_fwf(
     skip_width_check = False
     if specs is not None:
         _check_specs_contiguity(specs)
+        _check_specs_capacity(specs)
         target_cols = [s.name for s in specs]
         if isinstance(df, pl.LazyFrame):
             df = df.select(target_cols).collect()
@@ -466,6 +499,7 @@ def write_fwf(
         final_specs = specs
     else:
         final_specs = _infer_specs(df, bool_treatment, decimals)
+        _check_specs_capacity(final_specs)
         if isinstance(df, pl.LazyFrame):
             df = df.collect()
         skip_width_check = True
@@ -511,6 +545,7 @@ def sink_fwf(
         The path to the output file.
     specs : Sequence[FieldSpec] | None, optional
         A sequence of FieldSpec objects defining the output layout.
+        If None, the specification is inferred from the data.
     number_padding : str, default " "
         The padding character for numeric columns (right-aligned).
     str_padding : str, default " "
@@ -548,12 +583,14 @@ def sink_fwf(
     skip_width_check = False
     if specs is not None:
         _check_specs_contiguity(specs)
+        _check_specs_capacity(specs)
         lf = lf.select([s.name for s in specs])
         final_specs = specs
     else:
         final_specs = _infer_specs(
             lf, bool_treatment, decimals, infer_specs_rows=infer_specs_rows
         )
+        _check_specs_capacity(final_specs)
         skip_width_check = True
 
     current_row = 0
@@ -687,6 +724,9 @@ class FwfSource:
                 if with_columns:
                     df = df.select(with_columns)
 
+                if predicate is not None:
+                    df = df.filter(predicate)
+
                 if n_rows is not None:
                     remaining = n_rows - count
                     if remaining <= 0:
@@ -694,8 +734,9 @@ class FwfSource:
                     if len(df) > remaining:
                         df = df.head(remaining)
 
-                count += len(df)
-                yield df
+                if len(df) > 0:
+                    count += len(df)
+                    yield df
 
                 if n_rows is not None and count >= n_rows:
                     return
@@ -738,12 +779,13 @@ def read_fwf(
     actual_stride = line_length if line_length is not None else stride
     actual_data_len = actual_stride - len(newline_bytes)
 
-    total_spec_width = sum(s.length for s in specs)
-    if total_spec_width != actual_data_len:
-        raise ValueError(
-            f"Partial specification detected. Total spec width ({total_spec_width}) "
-            f"must match data length ({actual_data_len})."
-        )
+    # Validate that all specs are within bounds
+    for s in specs:
+        if s.offset + s.length > actual_data_len:
+            raise ValueError(
+                f"FieldSpec '{s.name}' (offset={s.offset}, length={s.length}) "
+                f"exceeds data length ({actual_data_len})."
+            )
 
     # EAGER PATH: Use the optimized parallel parser for maximum throughput
     parser = FwfParser(

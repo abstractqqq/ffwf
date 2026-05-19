@@ -64,22 +64,42 @@ def get_specs_and_widths():
     return specs, widths
 
 
-def validate_dfs(df_pandas, df_custom):
-    pl_pandas = pl.from_pandas(df_pandas.head(100))
-    pl_custom = df_custom.head(100)
-    pl_pandas.columns = pl_custom.columns
+def validate_dfs(df_pandas, df_custom, title):
+    if df_pandas is None or df_custom is None:
+        return
+
+    # Standardize pandas for comparison
+    if isinstance(df_pandas, pd.DataFrame):
+        # Reset index and drop it to avoid 'index' column in Polars
+        if not isinstance(df_pandas.index, pd.RangeIndex):
+            df_pandas = df_pandas.reset_index(drop=True)
+        pl_pandas = pl.from_pandas(df_pandas)
+    else:
+        pl_pandas = df_pandas
+
+    pl_custom = df_custom
+
+    # Standardize column names for comparison
+    if len(pl_pandas.columns) == len(pl_custom.columns):
+        pl_pandas.columns = pl_custom.columns
+
     try:
+        # Aggregation results might need sorting for comparison
+        if "Aggregation" in title:
+            pl_pandas = pl_pandas.sort("state")
+            pl_custom = pl_custom.sort("state")
+
         pl_testing.assert_frame_equal(pl_custom, pl_pandas, check_dtypes=False)
-        print("Validation successful: First 100 rows match.")
+        print(f"Validation successful for '{title}'.")
     except Exception as e:
-        print(f"Validation failed: {e}")
+        print(f"Validation failed for '{title}': {e}")
 
 
 def run_test_set(filename, specs, widths, test_fn, title, chart_name):
     print(f"\n--- {title} ---")
     results = {}
 
-    # 1. Pandas
+    # 1. Pandas (Baseline and Reference)
     start = time.perf_counter()
     res_pandas = test_fn(filename, specs, widths, mode="pandas")
     results["Pandas"] = time.perf_counter() - start
@@ -87,31 +107,31 @@ def run_test_set(filename, specs, widths, test_fn, title, chart_name):
 
     # 2. polars-fwf Eager (Seq)
     start = time.perf_counter()
-    test_fn(filename, specs, widths, mode="eager_seq")
+    res_eager_seq = test_fn(filename, specs, widths, mode="eager_seq")
     results["polars-fwf Eager (Seq)"] = time.perf_counter() - start
     print(f"polars-fwf Eager (Seq): {results['polars-fwf Eager (Seq)']:.4f}s")
+    validate_dfs(res_pandas, res_eager_seq, f"{title} (Eager Seq)")
 
     # 3. polars-fwf Eager (Par)
     start = time.perf_counter()
-    res_custom = test_fn(filename, specs, widths, mode="eager_par")
+    res_eager_par = test_fn(filename, specs, widths, mode="eager_par")
     results["polars-fwf Eager (Par)"] = time.perf_counter() - start
     print(f"polars-fwf Eager (Par): {results['polars-fwf Eager (Par)']:.4f}s")
+    validate_dfs(res_pandas, res_eager_par, f"{title} (Eager Par)")
 
     # 4. polars-fwf Lazy (Seq)
     start = time.perf_counter()
-    test_fn(filename, specs, widths, mode="lazy_seq")
+    res_lazy_seq = test_fn(filename, specs, widths, mode="lazy_seq")
     results["polars-fwf Lazy (Seq)"] = time.perf_counter() - start
     print(f"polars-fwf Lazy (Seq): {results['polars-fwf Lazy (Seq)']:.4f}s")
+    validate_dfs(res_pandas, res_lazy_seq, f"{title} (Lazy Seq)")
 
     # 5. polars-fwf Lazy (Par)
     start = time.perf_counter()
-    test_fn(filename, specs, widths, mode="lazy_par")
+    res_lazy_par = test_fn(filename, specs, widths, mode="lazy_par")
     results["polars-fwf Lazy (Par)"] = time.perf_counter() - start
     print(f"polars-fwf Lazy (Par): {results['polars-fwf Lazy (Par)']:.4f}s")
-
-    # Validation (only if eager_par and pandas returned frames)
-    if title == "Pure Reading Benchmark":
-        validate_dfs(res_pandas, res_custom)
+    validate_dfs(res_pandas, res_lazy_par, f"{title} (Lazy Par)")
 
     plot_results(results, title, chart_name)
     return results
@@ -139,12 +159,14 @@ def pipeline_fn(filename, specs, widths, mode):
     def apply_pipeline(df):
         if isinstance(df, pd.DataFrame):
             df.columns = [s.name for s in specs]
-            return df[(df["state"] == "NY") & (df["col_30"] > 10**15)][
+            # Reset index here to avoid carrying it into comparison
+            res = df[(df["state"] == "NY") & (df["col_30"] > 10**10)][
                 ["state", "col_30", "col_120"]
             ]
+            return res.reset_index(drop=True)
         else:
             return df.filter(
-                (pl.col("state") == "NY") & (pl.col("col_30") > 10**15)
+                (pl.col("state") == "NY") & (pl.col("col_30") > 10**10)
             ).select(["state", "col_30", "col_120"])
 
     if mode == "pandas":
@@ -159,14 +181,14 @@ def pipeline_fn(filename, specs, widths, mode):
     elif mode == "lazy_seq":
         return (
             pfwf.scan_fwf(filename, specs, parallel=False)
-            .filter((pl.col("state") == "NY") & (pl.col("col_30") > 10**15))
+            .filter((pl.col("state") == "NY") & (pl.col("col_30") > 10**10))
             .select(["state", "col_30", "col_120"])
             .collect()
         )
     elif mode == "lazy_par":
         return (
             pfwf.scan_fwf(filename, specs, parallel=True)
-            .filter((pl.col("state") == "NY") & (pl.col("col_30") > 10**15))
+            .filter((pl.col("state") == "NY") & (pl.col("col_30") > 10**10))
             .select(["state", "col_30", "col_120"])
             .collect()
         )
@@ -176,14 +198,16 @@ def aggregation_fn(filename, specs, widths, mode):
     def apply_agg(df):
         if isinstance(df, pd.DataFrame):
             df.columns = [s.name for s in specs]
-            return (
-                df[df["col_30"] > 10**14]
+            res = (
+                df[df["col_30"] > 10**10]
                 .groupby("state")["col_120"]
                 .agg(["min", "max"])
             )
+            # reset_index makes 'state' a column instead of index
+            return res.reset_index()
         else:
             return (
-                df.filter(pl.col("col_30") > 10**14)
+                df.filter(pl.col("col_30") > 10**10)
                 .group_by("state")
                 .agg(
                     [
@@ -205,7 +229,7 @@ def aggregation_fn(filename, specs, widths, mode):
     elif mode == "lazy_seq":
         return (
             pfwf.scan_fwf(filename, specs, parallel=False)
-            .filter(pl.col("col_30") > 10**14)
+            .filter(pl.col("col_30") > 10**10)
             .group_by("state")
             .agg(
                 [
@@ -218,7 +242,7 @@ def aggregation_fn(filename, specs, widths, mode):
     elif mode == "lazy_par":
         return (
             pfwf.scan_fwf(filename, specs, parallel=True)
-            .filter(pl.col("col_30") > 10**14)
+            .filter(pl.col("col_30") > 10**10)
             .group_by("state")
             .agg(
                 [

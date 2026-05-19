@@ -63,13 +63,13 @@ For large datasets, use `sink_fwf` to validate and write data batch-by-batch wit
 
 ```python
 # Streaming write
-pfwf.sink_fwf(lazy_df, "large_output.fwf", max_decimals=2)
+pfwf.sink_fwf(lazy_df, "large_output.fwf", decimals=2)
 ```
 
 ### Key Writing Features
 
 - **Validation**: Strict width validation before writing. `sink_fwf` reports the exact batch and row range on failure.
-- **Float Truncation**: Floats are truncated (not rounded) to `max_decimals` to prevent width violations.
+- **Float Rounding**: Floats are rounded to `decimals` to prevent width violations.
 - **Boolean Treatment**: Customizable mapping for booleans (e.g., `bool_treatment=('Y', 'N', ' ')`).
 - **Quote Stripping**: Automatically strips `'` and `"` from strings to ensure format integrity.
 - **Alignment**: Control string alignment with `pad_str_end` (True for left-aligned, False for right-aligned).
@@ -83,7 +83,15 @@ Supported `pfwf.DType` members:
 
 ## Benchmarks
 
-The following benchmarks compare `polars-fwf` against `pandas.read_fwf` (v2.2.3) using a synthetic dataset of 200,000 rows and 200 columns (~430MB).
+The following benchmarks compare `polars-fwf` against `pandas.read_fwf` (v2.2.3) using a synthetic dataset of **200,000 rows and 200 columns (~430MB)**.
+
+| Method | Reading | Pipeline | Aggregation |
+| :--- | :--- | :--- | :--- |
+| **Pandas** | 16.06s | 16.16s | 16.79s |
+| **polars-fwf (Seq)** | 0.51s | 0.51s | 0.51s |
+| **polars-fwf (Par)** | **0.09s** | **0.08s** | **0.08s** |
+
+*Benchmarks conducted on a 16-core machine. polars-fwf is **~170x faster** than Pandas for pure reading and **~200x faster** for filtered pipelines.*
 
 ### Pure Reading
 ![Pure Reading Benchmark](plots/read_benchmark.png)
