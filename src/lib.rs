@@ -20,6 +20,25 @@ pub enum PyDType {
     String,
 }
 
+#[pymethods]
+impl PyDType {
+    fn __str__(&self) -> &str {
+        match self {
+            PyDType::I8 => "I8",
+            PyDType::I16 => "I16",
+            PyDType::I32 => "I32",
+            PyDType::I64 => "I64",
+            PyDType::U8 => "U8",
+            PyDType::U16 => "U16",
+            PyDType::U32 => "U32",
+            PyDType::U64 => "U64",
+            PyDType::F32 => "F32",
+            PyDType::F64 => "F64",
+            PyDType::String => "String",
+        }
+    }
+}
+
 impl From<PyDType> for core::DType {
     fn from(dtype: PyDType) -> Self {
         match dtype {
@@ -38,7 +57,7 @@ impl From<PyDType> for core::DType {
     }
 }
 
-#[pyclass(name = "FieldSpec")]
+#[pyclass(name = "_FieldSpec")]
 #[derive(Debug, Clone)]
 pub struct PyFieldSpec {
     #[pyo3(get, set)]
