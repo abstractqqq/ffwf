@@ -59,10 +59,10 @@ def test_write_fwf_specs(tmp_path):
 
     pfwf.write_fwf(df, path, specs=specs)
 
-    with open(path, "r") as f:
+    with open(path, "rb") as f:
         lines = f.readlines()
-        assert lines[0] == "    1x    \n"
-        assert lines[1] == "   10yz   \n"
+        assert lines[0] == b"    1x    \n"
+        assert lines[1] == b"   10yz   \n"
 
 
 def test_write_fwf_validation(tmp_path):
@@ -95,11 +95,11 @@ def test_write_fwf_bool_treatment(tmp_path):
     df = pl.DataFrame({"a": [True, False, None]})
     pfwf.write_fwf(df, path, bool_treatment=("YES", "NO ", "---"))
 
-    with open(path, "r") as f:
+    with open(path, "rb") as f:
         lines = f.readlines()
-        assert lines[0] == "YES\n"
-        assert lines[1] == "NO \n"
-        assert lines[2] == "---\n"
+        assert lines[0] == b"YES\n"
+        assert lines[1] == b"NO \n"
+        assert lines[2] == b"---\n"
 
 
 def test_sink_fwf(tmp_path):
@@ -107,8 +107,8 @@ def test_sink_fwf(tmp_path):
     lf = pl.DataFrame({"a": [1, 2]}).lazy()
     specs = [pfwf.FieldSpec("a", 0, 5, "int")]
     pfwf.sink_fwf(lf, path, specs=specs)
-    with open(path, "r") as f:
-        assert f.readline() == "    1\n"
+    with open(path, "rb") as f:
+        assert f.readline() == b"    1\n"
 
 
 def test_sink_fwf_batch_validation(tmp_path):
@@ -133,13 +133,13 @@ def test_write_fwf_large_floats(tmp_path):
     df = pl.DataFrame({"val": [1.23456789e300, 1.23456789e-10]})
 
     # Test with 2 decimals
-    specs_dict = pfwf.write_fwf(df, path, max_decimals=2)
+    specs_dict = pfwf.write_fwf(df, path, decimals=2)
 
-    with open(path, "r") as f:
+    with open(path, "rb") as f:
         lines = f.readlines()
         # Polars truncate(2) should result in 1.23e300
-        assert "1.23" in lines[0]
-        assert "0.0" in lines[1]  # 1.2e-10 truncated to 2 decimals is 0.0
+        assert b"1.23" in lines[0]
+        assert b"0.0" in lines[1]  # 1.2e-10 truncated to 2 decimals is 0.0
 
 
 def test_write_fwf_float_width_validation(tmp_path):
@@ -149,7 +149,7 @@ def test_write_fwf_float_width_validation(tmp_path):
     specs = [pfwf.FieldSpec("val", 0, 5, "f64")]
 
     with pytest.raises(ValueError, match="has data longer"):
-        pfwf.write_fwf(df, path, specs=specs, max_decimals=2)
+        pfwf.write_fwf(df, path, specs=specs, decimals=2)
 
 
 def test_write_fwf_nan_inf(tmp_path):
@@ -158,22 +158,22 @@ def test_write_fwf_nan_inf(tmp_path):
     specs = [pfwf.FieldSpec("val", 0, 10, "f64")]
     pfwf.write_fwf(df, path, specs=specs)
 
-    with open(path, "r") as f:
+    with open(path, "rb") as f:
         lines = f.readlines()
-        assert "NaN" in lines[0]
-        assert "inf" in lines[1]
+        assert b"NaN" in lines[0]
+        assert b"inf" in lines[1]
 
 
 def test_write_fwf_truncation_logic(tmp_path):
     path = str(tmp_path / "trunc.fwf")
-    # 1.999 truncated to 1 decimal should be 1.9, NOT 2.0
+    # 1.999 rounded to 1 decimal should be 2.0
     df = pl.DataFrame({"val": [1.999]})
     specs = [pfwf.FieldSpec("val", 0, 5, "f64")]
-    pfwf.write_fwf(df, path, specs=specs, max_decimals=1)
+    pfwf.write_fwf(df, path, specs=specs, decimals=1)
 
-    with open(path, "r") as f:
-        line = f.read().rstrip("\n")
-        assert line == "  1.9"
+    with open(path, "rb") as f:
+        line = f.read().rstrip(b"\n")
+        assert line == b"  2.0"
 
 
 def test_write_fwf_truncation_zero_decimals(tmp_path):
@@ -181,14 +181,16 @@ def test_write_fwf_truncation_zero_decimals(tmp_path):
     df = pl.DataFrame({"val": [1.99, -1.99]})
 
     specs = [pfwf.FieldSpec("val", 0, 10, "f64")]
-    pfwf.write_fwf(df, path, specs=specs, max_decimals=0)
+    pfwf.write_fwf(df, path, specs=specs, decimals=0)
 
-    with open(path, "r") as f:
+    with open(path, "rb") as f:
         lines = f.readlines()
-        # Truncating 1.99 to 0 decimals should be 1.0 or 1
-        assert "1.0" in lines[0] or "1" in lines[0]
-        assert "-1.0" in lines[1] or "-1" in lines[1]
-        assert "2" not in lines[0]
+        # Rounding 1.99 to 0 decimals should be 2.0 or 2
+        assert b"2.0" in lines[0] or b"2" in lines[0]
+        assert b"-2.0" in lines[1] or b"-2" in lines[1]
+        assert (
+            b"1" not in lines[0] or b"1.0" in lines[0]
+        )  # Avoid false positives with 1.0 being in 2.0 if not careful, but here we just check logic.
 
 
 def test_write_fwf_f32_bounds(tmp_path):
@@ -200,10 +202,10 @@ def test_write_fwf_f32_bounds(tmp_path):
     specs = [pfwf.FieldSpec("val", 0, 20, "f32")]
     pfwf.write_fwf(df, path, specs=specs)
 
-    with open(path, "r") as f:
+    with open(path, "rb") as f:
         line = f.read().strip()
         # Polars might format as 1e+40 or 1e40 depending on version/context
-        assert "1e" in line.lower() and "40" in line
+        assert b"1e" in line.lower() and b"40" in line
 
 
 def test_write_fwf_negatives(tmp_path):
@@ -213,15 +215,15 @@ def test_write_fwf_negatives(tmp_path):
     # Specs with enough width for signs
     specs = [pfwf.FieldSpec("i", 0, 5, "int"), pfwf.FieldSpec("f", 5, 8, "float")]
 
-    pfwf.write_fwf(df, path, specs=specs, max_decimals=2)
+    pfwf.write_fwf(df, path, specs=specs, decimals=2)
 
-    with open(path, "r") as f:
+    with open(path, "rb") as f:
         lines = f.readlines()
         # "-1.23456" truncated to 2 decimals -> "-1.23" (len 5)
         # "-1" padded to width 5 -> "   -1"
-        assert lines[0] == "   -1   -1.23\n"
-        assert "-100" in lines[1]
-        assert "-0.0" in lines[1]
+        assert lines[0] == b"   -1   -1.23\n"
+        assert b"-100" in lines[1]
+        assert b"-0.0" in lines[1]
 
 
 if __name__ == "__main__":

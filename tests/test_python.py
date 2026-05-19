@@ -14,9 +14,9 @@ def test_read():
     path = "data/test_data.fwf"
     if not os.path.exists(path):
         os.makedirs("data", exist_ok=True)
-        with open(path, "w") as f:
+        with open(path, "wb") as f:
             f.write(
-                "00001      1.23 ABC \n00002      4.56 DEF \n00003      7.89 GHI \n"
+                b"00001      1.23 ABC \n00002      4.56 DEF \n00003      7.89 GHI \n"
             )
 
     df = pfwf.read_fwf(path, specs)

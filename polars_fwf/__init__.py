@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.metadata
 from typing import TYPE_CHECKING, Any, Iterator
 
 import polars as pl
@@ -8,12 +9,18 @@ from polars.io.plugins import register_io_source
 
 from ._fwf import DType, FwfParser, FwfReader, PyFieldSpec
 
+try:
+    __version__ = importlib.metadata.version("polars-fwf")
+except importlib.metadata.PackageNotFoundError:
+    __version__ = "unknown"
+
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
     from ._fwf import PyFieldSpec as FieldSpec
 
 __all__ = [
+    "__version__",
     "FwfParser",
     "FieldSpec",
     "DType",
@@ -164,7 +171,7 @@ def _validate_bool_treatment(bool_treatment: Any) -> tuple[str, str, str]:
 def _infer_specs(
     df_or_lf: pl.DataFrame | pl.LazyFrame,
     bool_treatment: tuple[str, str, str],
-    max_decimals: int,
+    decimals: int,
     infer_specs_rows: int | None = None,
 ) -> Sequence[PyFieldSpec]:
     """
@@ -176,7 +183,7 @@ def _infer_specs(
         The data to infer from.
     bool_treatment : tuple[str, str, str]
         The boolean mapping (used for bool width).
-    max_decimals : int
+    decimals : int
         The precision for float width calculation.
     infer_specs_rows : int | None, optional
         Limit inference to the first N rows for LazyFrames.
@@ -257,7 +264,7 @@ def _infer_specs(
 def _validate_and_format_batch(
     df: pl.DataFrame,
     specs: Sequence[PyFieldSpec],
-    max_decimals: int,
+    decimals: int,
     bool_treatment: tuple[str, str, str],
     number_padding: str,
     str_padding: str,
@@ -273,8 +280,8 @@ def _validate_and_format_batch(
         The batch of data.
     specs : Sequence[PyFieldSpec]
         The layout specification.
-    max_decimals : int
-        Decimal precision for float truncation.
+    decimals : int
+        Decimal precision for float rounding.
     bool_treatment : tuple[str, str, str]
         Mapping for boolean values.
     number_padding : str
@@ -310,7 +317,7 @@ def _validate_and_format_batch(
                 .otherwise(pl.lit(bool_treatment[1]))
             )
         elif dtype.is_float():
-            col = col.truncate(max_decimals)
+            col = col.round(decimals)
         elif dtype == pl.String or isinstance(dtype, (pl.Categorical, pl.Enum)):
             # Strip quotes
             col = col.cast(pl.String).str.replace_all(r"[\"']", "")
@@ -399,7 +406,7 @@ def write_fwf(
     number_padding: str = " ",
     str_padding: str = " ",
     pad_str_end: bool = True,
-    max_decimals: int = 6,
+    decimals: int = 3,
     bool_treatment: tuple[str, str, str] = ("T", "F", "null"),
     simple_dtypes: bool = True,
 ) -> dict[str, dict]:
@@ -422,9 +429,9 @@ def write_fwf(
     pad_str_end : bool, default True
         If True, string columns are left-aligned (padded at the end).
         If False, string columns are right-aligned (padded at the start).
-    max_decimals : int, default 6
+    decimals : int, default 3
         The maximum number of decimals for float columns.
-        Floats are truncated (not rounded) to this precision using string formatting.
+        Floats are rounded to this precision using string formatting.
     bool_treatment : tuple[str, str, str], default ("T", "F", "null")
         The string representations for True, False, and Null boolean values.
         Must be an indexable collection of 3 strings.
@@ -458,7 +465,7 @@ def write_fwf(
             df = df.select(target_cols)
         final_specs = specs
     else:
-        final_specs = _infer_specs(df, bool_treatment, max_decimals)
+        final_specs = _infer_specs(df, bool_treatment, decimals)
         if isinstance(df, pl.LazyFrame):
             df = df.collect()
         skip_width_check = True
@@ -466,7 +473,7 @@ def write_fwf(
     batch_out = _validate_and_format_batch(
         df,
         final_specs,
-        max_decimals,
+        decimals,
         bool_treatment,
         number_padding,
         str_padding,
@@ -488,7 +495,7 @@ def sink_fwf(
     number_padding: str = " ",
     str_padding: str = " ",
     pad_str_end: bool = True,
-    max_decimals: int = 6,
+    decimals: int = 3,
     bool_treatment: tuple[str, str, str] = ("T", "F", "null"),
     simple_dtypes: bool = True,
     infer_specs_rows: int | None = 100,
@@ -511,9 +518,9 @@ def sink_fwf(
     pad_str_end : bool, default True
         If True, string columns are left-aligned (padded at the end).
         If False, string columns are right-aligned (padded at the start).
-    max_decimals : int, default 6
+    decimals : int, default 3
         The maximum number of decimals for float columns.
-        Floats are truncated (not rounded) to this precision using string formatting.
+        Floats are rounded to this precision using string formatting.
     bool_treatment : tuple[str, str, str], default ("T", "F", "null")
         The string representations for True, False, and Null boolean values.
         Must be an indexable collection of 3 strings.
@@ -545,7 +552,7 @@ def sink_fwf(
         final_specs = specs
     else:
         final_specs = _infer_specs(
-            lf, bool_treatment, max_decimals, infer_specs_rows=infer_specs_rows
+            lf, bool_treatment, decimals, infer_specs_rows=infer_specs_rows
         )
         skip_width_check = True
 
@@ -556,7 +563,7 @@ def sink_fwf(
                 batch_out = _validate_and_format_batch(
                     batch,
                     final_specs,
-                    max_decimals,
+                    decimals,
                     bool_treatment,
                     number_padding,
                     str_padding,

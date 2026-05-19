@@ -16,3 +16,8 @@ lexical-core = "1.0"
 memmap2 = "0.9"
 rayon = "1.10"
 pyo3 = { version = "0.22", features = ["extension-module", "abi3-py39"] }
+
+[profile.release]
+codegen-units = 1
+strip = true
+lto = "fat"

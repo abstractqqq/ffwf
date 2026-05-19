@@ -40,12 +40,12 @@ def test_write_negative_zero(tmp_path):
     # Spec width 4 is enough for "-0.0" (standard polars string repr)
     specs = [pfwf.FieldSpec("f", 0, 4, "float")]
 
-    pfwf.write_fwf(df, path, specs=specs, max_decimals=1)
+    pfwf.write_fwf(df, path, specs=specs, decimals=1)
 
-    with open(path, "r") as f:
+    with open(path, "rb") as f:
         line = f.read()
         # Standard polars cast(String) for -0.0 is "-0.0"
-        assert line == "-0.0\n"
+        assert line == b"-0.0\n"
 
 
 def test_write_negative_zero_validation_fail(tmp_path):
@@ -58,7 +58,7 @@ def test_write_negative_zero_validation_fail(tmp_path):
     with pytest.raises(
         ValueError, match=r"has data longer \(4\) than specified length \(3\)"
     ):
-        pfwf.write_fwf(df, path, specs=specs, max_decimals=1)
+        pfwf.write_fwf(df, path, specs=specs, decimals=1)
 
 
 if __name__ == "__main__":
