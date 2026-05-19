@@ -52,8 +52,7 @@ jobs:
         shell: bash
 
       - name: Run tests
-        if: runner.os == 'Linux'
         run: |
           uv pip install -e ".[dev]"
-          uv run pytest tests/test_python.py tests/test_plugin.py tests/test_nan.py tests/test_streaming.py
+          uv run pytest --ignore=tests/test_oom.py
         shell: bash

@@ -12,10 +12,9 @@ def test_streaming_various_chunks():
     os.makedirs("data", exist_ok=True)
 
     # 10 rows, 10 chars each + newline = 11 bytes per line
-    rows = [f"{i:05}ABCDE" for i in range(10)]
-    with open(path, "w") as f:
-        for row in rows:
-            f.write(row + "\n")
+    rows = [f"{i:05}ABCDE\n".encode("utf-8") for i in range(10)]
+    with open(path, "wb") as f:
+        f.writelines(rows)
 
     specs = [
         pfwf.FieldSpec("id", 0, 5, pfwf.DType.I32),

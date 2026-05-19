@@ -95,7 +95,7 @@ def generate_large_fwf(filename, num_rows=200000, num_cols=200):
     line_length = sum(widths)
     os.makedirs(os.path.dirname(filename), exist_ok=True)
 
-    with open(filename, "w") as f:
+    with open(filename, "wb") as f:
         for i in range(num_rows):
             row_data = []
             for t, w in zip(types, widths):
@@ -121,7 +121,7 @@ def generate_large_fwf(filename, num_rows=200000, num_cols=200):
                         np.random.choice(list("ABCDEFGHIJKLMNOPQRSTUVWXYZ"), 5)
                     ).ljust(w)
                     row_data.append(val)
-            f.write("".join(row_data) + "\n")
+            f.write("".join(row_data).encode("utf-8") + b"\n")
             if (i + 1) % 50000 == 0:
                 print(f"Progress: {i + 1}/{num_rows} rows written.")
 

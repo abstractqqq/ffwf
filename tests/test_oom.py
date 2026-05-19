@@ -29,7 +29,7 @@ def test_lazy_large_file_stability():
 
     start = time.perf_counter()
     lf = pfwf.scan_fwf(path, specs)
-    print("Schema:", lf.schema)
+    print("Schema:", lf.collect_schema())
 
     df = lf.filter(pl.col("state") == "NY").collect()
     end = time.perf_counter()

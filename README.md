@@ -22,13 +22,11 @@ import polars as pl
 import polars_fwf as pfwf
 
 # 1. Define field specifications
-# padding=None (default) strips all ASCII whitespace.
-# padding=ord('0') would strip only leading/trailing zeros.
-# Note: Numeric parsers handle leading zeros automatically.
+# String aliases like 'int', 'float', 'str' are supported.
 specs = [
-    pfwf.FieldSpec("id", offset=0, length=5, dtype=pfwf.DType.I32),
-    pfwf.FieldSpec("val", offset=5, length=10, dtype=pfwf.DType.F64),
-    pfwf.FieldSpec("tag", offset=15, length=5, dtype=pfwf.DType.String, padding=ord(" ")),
+    pfwf.FieldSpec("id", offset=0, length=5, dtype="int"),
+    pfwf.FieldSpec("val", offset=5, length=10, dtype="float"),
+    pfwf.FieldSpec("tag", offset=15, length=5, dtype="str"),
 ]
 
 # 2. Eager parsing (returns pl.DataFrame)
@@ -36,8 +34,45 @@ df = pfwf.read_fwf("data.fwf", specs)
 
 # 3. Lazy parsing (returns pl.LazyFrame)
 lazy_df = pfwf.scan_fwf("data.fwf", specs)
+
 result = lazy_df.filter(pl.col("val") > 100.0).group_by("tag").count().collect()
 ```
+
+## Writing Fixed-Width Files
+
+`polars-fwf` provides eager (`write_fwf`) and streaming (`sink_fwf`) writers. Both methods support automatic schema inference.
+
+### Eager Writing (DataFrame)
+
+```python
+# Automatic inference of widths and types
+# Returns the inferred specification as a dictionary
+specs = pfwf.write_fwf(df, "output.fwf")
+
+# Explicit specification
+specs = [
+    pfwf.FieldSpec("id", 0, 5, "int"),
+    pfwf.FieldSpec("val", 5, 10, "float")
+]
+pfwf.write_fwf(df, "output.fwf", specs=specs)
+```
+
+### Streaming Writing (LazyFrame)
+
+For large datasets, use `sink_fwf` to validate and write data batch-by-batch without loading the entire frame into memory.
+
+```python
+# Streaming write
+pfwf.sink_fwf(lazy_df, "large_output.fwf", decimals=2)
+```
+
+### Key Writing Features
+
+- **Validation**: Strict width validation before writing. `sink_fwf` reports the exact batch and row range on failure.
+- **Float Rounding**: Floats are rounded to `decimals` to prevent width violations.
+- **Boolean Treatment**: Customizable mapping for booleans (e.g., `bool_treatment=('Y', 'N', ' ')`).
+- **Quote Stripping**: Automatically strips `'` and `"` from strings to ensure format integrity.
+- **Alignment**: Control string alignment with `pad_str_end` (True for left-aligned, False for right-aligned).
 
 ### Supported Data Types
 
@@ -48,7 +83,15 @@ Supported `pfwf.DType` members:
 
 ## Benchmarks
 
-The following benchmarks compare `polars-fwf` against `pandas.read_fwf` (v2.2.3) using a synthetic dataset of 200,000 rows and 200 columns (~430MB).
+The following benchmarks compare `polars-fwf` against `pandas.read_fwf` (v2.2.3) using a synthetic dataset of **200,000 rows and 200 columns (~430MB)**.
+
+| Method | Reading | Pipeline | Aggregation |
+| :--- | :--- | :--- | :--- |
+| **Pandas** | 16.06s | 16.16s | 16.79s |
+| **polars-fwf (Seq)** | 0.51s | 0.51s | 0.51s |
+| **polars-fwf (Par)** | **0.09s** | **0.08s** | **0.08s** |
+
+*Benchmarks conducted on a 16-core machine. polars-fwf is **~170x faster** than Pandas for pure reading and **~200x faster** for filtered pipelines.*
 
 ### Pure Reading
 ![Pure Reading Benchmark](plots/read_benchmark.png)

@@ -12,12 +12,18 @@ def test_nan_handling():
     path = "data/nan_test.fwf"
     os.makedirs("data", exist_ok=True)
 
-    with open(path, "w") as f:
-        f.write("      1.23\n")
-        f.write("       NaN\n")
-        f.write("      4.56\n")
-        f.write("       inf\n")
-        f.write("      NULL\n")
+    lines = [
+        b"      1.23\n",
+        b"       NaN\n",
+        b"       nan\n",
+        b"       NAN\n",
+        b"      4.56\n",
+        b"       inf\n",
+        b"       INF\n",
+        b"      NULL\n",
+    ]
+    with open(path, "wb") as f:
+        f.writelines(lines)
 
     print(f"Reading {path} with F64 spec...")
     df = pfwf.read_fwf(path, specs)
@@ -25,8 +31,14 @@ def test_nan_handling():
     print(df)
 
     # Check if NaN/inf/NULL are handled
-    # Our current Rust impl uses lexical_core::parse, which might not handle 'NaN' strings by default
-    # unless configured. If it fails, it should push Null per our ErrorStrategy.
+    assert df["val"][0] == 1.23
+    assert pl.Series([df["val"][1]]).is_nan()[0]
+    assert pl.Series([df["val"][2]]).is_nan()[0]
+    assert pl.Series([df["val"][3]]).is_nan()[0]
+    assert df["val"][4] == 4.56
+    assert df["val"][5] == float("inf")
+    assert df["val"][6] == float("inf")
+    assert df["val"][7] is None
 
 
 if __name__ == "__main__":
