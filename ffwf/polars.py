@@ -1,124 +1,161 @@
 from __future__ import annotations
 
-import importlib.metadata
-import warnings
-from typing import TYPE_CHECKING, Any, Iterator
+from typing import TYPE_CHECKING, Any, Iterator, Sequence
 
 import polars as pl
+
+
+# Manual version check to avoid extra dependency
+def _check_pl_version():
+    v = pl.__version__.split(".")
+    major = int(v[0])
+    minor = int(v[1])
+    if major < 1 or (major == 1 and minor < 34):
+        raise ImportError(
+            f"ffwf.polars requires polars >= 1.34, found {pl.__version__}"
+        )
+
+
+_check_pl_version()
+
 import polars.selectors as cs
 from polars.io.plugins import register_io_source
 
-from ._fwf import DType, FwfParser, FwfReader, PyFieldSpec
-
-try:
-    __version__ = importlib.metadata.version("polars-fwf")
-except importlib.metadata.PackageNotFoundError:
-    __version__ = "unknown"
-
-if TYPE_CHECKING:
-    from collections.abc import Sequence
-
-    from ._fwf import PyFieldSpec as FieldSpec
+from . import DType, FieldSpec, FwfParser, FwfReader, PyFieldSpec
 
 __all__ = [
-    "__version__",
-    "FwfParser",
-    "FieldSpec",
-    "DType",
-    "read_fwf",
-    "scan_fwf",
-    "write_fwf",
-    "sink_fwf",
+    "read_fwf_pl",
+    "scan_fwf_pl",
+    "write_fwf_pl",
+    "sink_fwf_pl",
 ]
 
 
-def FieldSpec(
-    name: str,
-    offset: int,
-    length: int,
-    dtype: DType | str,
-    padding: int | None = None,
-) -> PyFieldSpec:
+class ArrowCapsule:
     """
-    Define a field specification for a fixed-width file.
-
-    Parameters
-    ----------
-    name : str
-        The name of the column.
-    offset : int
-        The starting byte offset of the field.
-    length : int
-        The length of the field in bytes.
-    dtype : DType | str
-        The data type of the field. Can be a DType enum or a string alias
-        like 'str', 'int', 'f64', etc.
-    padding : int | None, optional
-        Optional padding byte.
-
-    Returns
-    -------
-    PyFieldSpec
-        An internal field specification object.
+    Internal adapter to bridge Arrow C Data Interface capsules with Polars.
     """
-    if isinstance(dtype, str):
-        dtype_lower = dtype.lower()
-        if dtype_lower in ("str", "string"):
-            resolved_dtype = DType.String
-        elif dtype_lower in ("int", "integer", "i32"):
-            resolved_dtype = DType.I32
-        elif dtype_lower == "i8":
-            resolved_dtype = DType.I8
-        elif dtype_lower == "i16":
-            resolved_dtype = DType.I16
-        elif dtype_lower == "i64":
-            resolved_dtype = DType.I64
-        elif dtype_lower == "u8":
-            resolved_dtype = DType.U8
-        elif dtype_lower == "u16":
-            resolved_dtype = DType.U16
-        elif dtype_lower == "u32":
-            resolved_dtype = DType.U32
-        elif dtype_lower == "u64":
-            resolved_dtype = DType.U64
-        elif dtype_lower in ("f32", "float"):
-            resolved_dtype = DType.F32
-        elif dtype_lower in ("f64", "double"):
-            resolved_dtype = DType.F64
-        else:
-            raise ValueError(f"Unknown DType alias: {dtype}")
-    else:
-        resolved_dtype = dtype
 
-    if length <= 0:
-        raise ValueError(f"FieldSpec width must be positive, got {length}")
+    def __init__(self, capsules: tuple):
+        """
+        Initialize the adapter with a tuple of (array_capsule, schema_capsule).
 
-    # Integer width capacity validation
-    max_w = resolved_dtype.max_width()
-    if max_w is not None and length > max_w:
-        warnings.warn(
-            f"Width {length} exceeds maximum capacity for {resolved_dtype} "
-            f"(max {max_w} characters). This may cause overflow or parsing errors.",
-            UserWarning,
-            stacklevel=2,
+        Parameters
+        ----------
+        capsules : tuple
+            A tuple containing the Arrow C Data Interface capsules.
+        """
+        self.array_capsule, self.schema_capsule = capsules
+
+    def __arrow_c_array__(self, requested_schema=None):
+        """
+        Implement the Arrow C Data Interface protocol.
+        """
+        return self.schema_capsule, self.array_capsule
+
+
+class FwfSource:
+    """
+    Polars IO Source implementation for Fixed-Width Files (FWF).
+    """
+
+    def __init__(
+        self,
+        path: str,
+        specs: Sequence[PyFieldSpec],
+        line_length: int,
+        chunk_size: int | None,
+        parallel: bool = True,
+    ):
+        """
+        Initialize the FWF source.
+
+        Parameters
+        ----------
+        path : str
+            Path to the FWF file.
+        specs : Sequence[PyFieldSpec]
+            List of field specifications.
+        line_length : int
+            The total length of each line in bytes.
+        chunk_size : int | None
+            The number of rows to parse per batch. If None, it's inferred.
+        parallel : bool, default True
+            Whether to use multi-threaded parsing in Rust.
+        """
+        self.path = path
+        self.specs = specs
+        self.line_length = line_length
+        self.chunk_size = chunk_size
+        self.parallel = parallel
+
+    def __call__(
+        self,
+        with_columns: list[str] | None,
+        predicate: pl.Expr | None,
+        n_rows: int | None,
+        batch_size: int | None,
+    ) -> Iterator[pl.DataFrame]:
+        """
+        Execute the IO source and yield DataFrames.
+
+        Parameters
+        ----------
+        with_columns : list[str] | None
+            List of columns to project.
+        predicate : pl.Expr | None
+            Optional filter expression.
+        n_rows : int | None
+            Optional row limit.
+        batch_size : int | None
+            Optional override for the chunk size.
+
+        Yields
+        ------
+        pl.DataFrame
+            A Polars DataFrame containing the parsed batch.
+        """
+        reader = FwfReader(
+            self.path,
+            list(self.specs),
+            self.line_length,
+            parallel=self.parallel,
+            chunk_size=batch_size or self.chunk_size,
         )
 
-    return PyFieldSpec(name, offset, length, resolved_dtype, padding)
+        count = 0
+        while True:
+            capsule_tuples = reader.next_burst()
+            if not capsule_tuples:
+                break
+
+            for capsules in capsule_tuples:
+                df = pl.from_arrow(ArrowCapsule(capsules))
+
+                if with_columns:
+                    df = df.select(with_columns)
+
+                if predicate is not None:
+                    df = df.filter(predicate)
+
+                if n_rows is not None:
+                    remaining = n_rows - count
+                    if remaining <= 0:
+                        return
+                    if len(df) > remaining:
+                        df = df.head(remaining)
+
+                if len(df) > 0:
+                    count += len(df)
+                    yield df
+
+                if n_rows is not None and count >= n_rows:
+                    return
 
 
 def _check_supported_types(df_or_lf: pl.DataFrame | pl.LazyFrame):
     """
     Verify that all columns in the input have types supported by the FWF writer.
-
-    Parameters
-    ----------
-    df_or_lf : pl.DataFrame | pl.LazyFrame
-        The data to check.
-
-    Raises
-    ------
-    TypeError
-        If any column has an unsupported type (e.g., Date, List, Struct).
     """
     supported = (
         cs.boolean()
@@ -136,16 +173,6 @@ def _check_supported_types(df_or_lf: pl.DataFrame | pl.LazyFrame):
 def _check_specs_contiguity(specs: Sequence[PyFieldSpec]):
     """
     Ensure the provided field specifications are contiguous and start at offset 0.
-
-    Parameters
-    ----------
-    specs : Sequence[PyFieldSpec]
-        The specifications to validate.
-
-    Raises
-    ------
-    ValueError
-        If specs are empty, don't start at 0, or have gaps/overlaps.
     """
     if not specs:
         raise ValueError("Specs cannot be empty if provided")
@@ -164,6 +191,8 @@ def _check_specs_capacity(specs: Sequence[PyFieldSpec]):
     """
     Check if any FieldSpec width exceeds the maximum capacity of its type and warn.
     """
+    import warnings
+
     for s in specs:
         max_w = s.dtype.max_width()
         if max_w is not None and s.length > max_w:
@@ -178,16 +207,6 @@ def _check_specs_capacity(specs: Sequence[PyFieldSpec]):
 def _validate_bool_treatment(bool_treatment: Any) -> tuple[str, str, str]:
     """
     Validate and normalize the boolean mapping collection.
-
-    Parameters
-    ----------
-    bool_treatment : Any
-        An indexable collection (tuple/list) of 3 strings.
-
-    Returns
-    -------
-    tuple[str, str, str]
-        The normalized (True, False, Null) mapping.
     """
     try:
         if len(bool_treatment) != 3:
@@ -208,22 +227,6 @@ def _infer_specs(
 ) -> Sequence[PyFieldSpec]:
     """
     Automatically infer column widths and types from the data.
-
-    Parameters
-    ----------
-    df_or_lf : pl.DataFrame | pl.LazyFrame
-        The data to infer from.
-    bool_treatment : tuple[str, str, str]
-        The boolean mapping (used for bool width).
-    decimals : int
-        The precision for float width calculation.
-    infer_specs_rows : int | None, optional
-        Limit inference to the first N rows for LazyFrames.
-
-    Returns
-    -------
-    Sequence[PyFieldSpec]
-        The inferred field specifications.
     """
     schema = df_or_lf.collect_schema()
     agg_exprs = []
@@ -305,35 +308,6 @@ def _validate_and_format_batch(
 ) -> pl.DataFrame:
     """
     Transform and validate a single batch of data for FWF writing.
-
-    Parameters
-    ----------
-    df : pl.DataFrame
-        The batch of data.
-    specs : Sequence[PyFieldSpec]
-        The layout specification.
-    decimals : int
-        Decimal precision for float rounding.
-    bool_treatment : tuple[str, str, str]
-        Mapping for boolean values.
-    number_padding : str
-        Character for numeric padding.
-    str_padding : str
-        Character for string padding.
-    pad_str_end : bool
-        Alignment for string columns.
-    skip_width_check : bool
-        Whether to skip checking if data fits in specified widths.
-
-    Returns
-    -------
-    pl.DataFrame
-        A single-column DataFrame containing concatenated formatted lines.
-
-    Raises
-    ------
-    ValueError
-        If any data value exceeds its specified field width.
     """
     exprs = []
     for spec in specs:
@@ -394,20 +368,6 @@ def _build_spec_map(
 ) -> dict[str, dict]:
     """
     Construct the final specification dictionary returned to the user.
-
-    Parameters
-    ----------
-    specs : Sequence[PyFieldSpec]
-        The active specifications.
-    schema : pl.Schema
-        The Polars schema (used for bool type check).
-    simple_dtypes : bool
-        Whether to return simplified type names.
-
-    Returns
-    -------
-    dict[str, dict]
-        A dictionary mapping column names to their offset, length, and dtype.
     """
     spec_map = {}
     for spec in specs:
@@ -431,7 +391,7 @@ def _build_spec_map(
     return spec_map
 
 
-def write_fwf(
+def write_fwf_pl(
     df: pl.DataFrame | pl.LazyFrame,
     path: str,
     specs: Sequence[PyFieldSpec] | None = None,
@@ -444,45 +404,6 @@ def write_fwf(
 ) -> dict[str, dict]:
     """
     Write a Polars DataFrame or LazyFrame to a Fixed-Width File (FWF) eagerly.
-
-    Parameters
-    ----------
-    df : pl.DataFrame | pl.LazyFrame
-        The DataFrame or LazyFrame to write.
-    path : str
-        The path to the output file.
-    specs : Sequence[FieldSpec] | None, optional
-        A sequence of FieldSpec objects defining the output layout.
-        If None, the specification is inferred from the data.
-    number_padding : str, default " "
-        The padding character for numeric columns (right-aligned).
-    str_padding : str, default " "
-        The padding character for string columns.
-    pad_str_end : bool, default True
-        If True, string columns are left-aligned (padded at the end).
-        If False, string columns are right-aligned (padded at the start).
-    decimals : int, default 3
-        The maximum number of decimals for float columns.
-        Floats are rounded to this precision using string formatting.
-    bool_treatment : tuple[str, str, str], default ("T", "F", "null")
-        The string representations for True, False, and Null boolean values.
-        Must be an indexable collection of 3 strings.
-    simple_dtypes : bool, default True
-        If True, the returned specification dictionary uses simplified
-        dtype names ('int', 'str', 'f64', 'bool').
-
-    Returns
-    -------
-    dict[str, dict]
-        The specification used to write the file, mapping column names
-        to {offset, length, dtype}.
-
-    Notes
-    -----
-    - This function uses `quote_style="never"` when writing.
-    - All quotes (' or ") will be stripped from string columns.
-    - In Fixed-Width format, empty strings and string nulls are indistinguishable
-      in the output file (both will appear as a field of padding characters).
     """
     _check_supported_types(df)
     bool_treatment = _validate_bool_treatment(bool_treatment)
@@ -522,7 +443,7 @@ def write_fwf(
     return _build_spec_map(final_specs, df.schema, simple_dtypes)
 
 
-def sink_fwf(
+def sink_fwf_pl(
     lf: pl.LazyFrame,
     path: str,
     specs: Sequence[PyFieldSpec] | None = None,
@@ -536,46 +457,6 @@ def sink_fwf(
 ) -> dict[str, dict]:
     """
     Write a Polars LazyFrame to a Fixed-Width File (FWF) using streaming (collect_batches).
-
-    Parameters
-    ----------
-    lf : pl.LazyFrame
-        The LazyFrame to write.
-    path : str
-        The path to the output file.
-    specs : Sequence[FieldSpec] | None, optional
-        A sequence of FieldSpec objects defining the output layout.
-        If None, the specification is inferred from the data.
-    number_padding : str, default " "
-        The padding character for numeric columns (right-aligned).
-    str_padding : str, default " "
-        The padding character for string columns.
-    pad_str_end : bool, default True
-        If True, string columns are left-aligned (padded at the end).
-        If False, string columns are right-aligned (padded at the start).
-    decimals : int, default 3
-        The maximum number of decimals for float columns.
-        Floats are rounded to this precision using string formatting.
-    bool_treatment : tuple[str, str, str], default ("T", "F", "null")
-        The string representations for True, False, and Null boolean values.
-        Must be an indexable collection of 3 strings.
-    simple_dtypes : bool, default True
-        If True, the returned specification dictionary uses simplified
-        dtype names ('int', 'str', 'f64', 'bool').
-    infer_specs_rows : int | None, default 100
-        Number of rows to use for schema inference if `specs` is None.
-
-    Returns
-    -------
-    dict[str, dict]
-        The specification used to write the file.
-
-    Notes
-    -----
-    - This function uses `quote_style="never"` when writing.
-    - All quotes (' or ") will be stripped from string columns.
-    - In Fixed-Width format, empty strings and string nulls are indistinguishable
-      in the output file (both will appear as a field of padding characters).
     """
     _check_supported_types(lf)
     bool_treatment = _validate_bool_treatment(bool_treatment)
@@ -620,131 +501,9 @@ def sink_fwf(
     return _build_spec_map(final_specs, lf.collect_schema(), simple_dtypes)
 
 
-class ArrowCapsule:
-    """
-    Internal adapter to bridge Arrow C Data Interface capsules with Polars.
-    """
-
-    def __init__(self, capsules: tuple):
-        """
-        Initialize the adapter with a tuple of (array_capsule, schema_capsule).
-
-        Parameters
-        ----------
-        capsules : tuple
-            A tuple containing the Arrow C Data Interface capsules.
-        """
-        self.array_capsule, self.schema_capsule = capsules
-
-    def __arrow_c_array__(self, requested_schema=None):
-        """
-        Implement the Arrow C Data Interface protocol.
-        """
-        return self.schema_capsule, self.array_capsule
-
-
-class FwfSource:
-    """
-    Polars IO Source implementation for Fixed-Width Files (FWF).
-    """
-
-    def __init__(
-        self,
-        path: str,
-        specs: Sequence[FieldSpec],
-        line_length: int,
-        chunk_size: int | None,
-        parallel: bool = True,
-    ):
-        """
-        Initialize the FWF source.
-
-        Parameters
-        ----------
-        path : str
-            Path to the FWF file.
-        specs : Sequence[FieldSpec]
-            List of field specifications.
-        line_length : int
-            The total length of each line in bytes.
-        chunk_size : int | None
-            The number of rows to parse per batch. If None, it's inferred.
-        parallel : bool, default True
-            Whether to use multi-threaded parsing in Rust.
-        """
-        self.path = path
-        self.specs = specs
-        self.line_length = line_length
-        self.chunk_size = chunk_size
-        self.parallel = parallel
-
-    def __call__(
-        self,
-        with_columns: list[str] | None,
-        predicate: pl.Expr | None,
-        n_rows: int | None,
-        batch_size: int | None,
-    ) -> Iterator[pl.DataFrame]:
-        """
-        Execute the IO source and yield DataFrames.
-
-        Parameters
-        ----------
-        with_columns : list[str] | None
-            List of columns to project.
-        predicate : pl.Expr | None
-            Optional filter expression.
-        n_rows : int | None
-            Optional row limit.
-        batch_size : int | None
-            Optional override for the chunk size.
-
-        Yields
-        ------
-        pl.DataFrame
-            A Polars DataFrame containing the parsed batch.
-        """
-        reader = FwfReader(
-            self.path,
-            list(self.specs),
-            self.line_length,
-            parallel=self.parallel,
-            chunk_size=batch_size or self.chunk_size,
-        )
-
-        count = 0
-        while True:
-            capsule_tuples = reader.next_burst()
-            if not capsule_tuples:
-                break
-
-            for capsules in capsule_tuples:
-                df = pl.from_arrow(ArrowCapsule(capsules))
-
-                if with_columns:
-                    df = df.select(with_columns)
-
-                if predicate is not None:
-                    df = df.filter(predicate)
-
-                if n_rows is not None:
-                    remaining = n_rows - count
-                    if remaining <= 0:
-                        return
-                    if len(df) > remaining:
-                        df = df.head(remaining)
-
-                if len(df) > 0:
-                    count += len(df)
-                    yield df
-
-                if n_rows is not None and count >= n_rows:
-                    return
-
-
-def read_fwf(
+def read_fwf_pl(
     path: str,
-    specs: Sequence[FieldSpec],
+    specs: Sequence[PyFieldSpec],
     line_length: int | None = None,
     newline: str | bytes = "\n",
     chunk_size: int | None = None,
@@ -752,26 +511,6 @@ def read_fwf(
 ) -> pl.DataFrame:
     """
     Read a fixed-width file into a Polars DataFrame using zero-copy Arrow transfer.
-
-    Parameters
-    ----------
-    path : str
-        Path to the FWF file.
-    specs : Sequence[FieldSpec]
-        Sequence of FieldSpec objects defining column layout and types.
-    line_length : int | None, optional
-        Total width of each line in bytes (including newline). If None, auto-detected.
-    newline : str | bytes, default "\\n"
-        Newline character(s) used in the file.
-    chunk_size : int | None, optional
-        Number of rows per internal batch. If None, inferred by Rust parser.
-    parallel : bool, default True
-        Use multi-threaded parsing in the Rust core.
-
-    Returns
-    -------
-    pl.DataFrame
-        A Polars DataFrame containing the parsed data.
     """
     newline_bytes = newline if isinstance(newline, bytes) else newline.encode("utf-8")
     stride, data_len = FwfParser.detect_line_length(path, newline_bytes)
@@ -806,9 +545,9 @@ def read_fwf(
     return pl.concat(dfs, how="vertical")
 
 
-def scan_fwf(
+def scan_fwf_pl(
     path: str,
-    specs: Sequence[FieldSpec],
+    specs: Sequence[PyFieldSpec],
     line_length: int | None = None,
     newline: str | bytes = "\n",
     chunk_size: int | None = None,
@@ -816,26 +555,6 @@ def scan_fwf(
 ) -> pl.LazyFrame:
     """
     Scan a fixed-width file lazily using Polars IO Plugin interface.
-
-    Parameters
-    ----------
-    path : str
-        Path to the FWF file.
-    specs : Sequence[FieldSpec]
-        Sequence of FieldSpec objects defining column layout and types.
-    line_length : int | None, optional
-        Total width of each line in bytes (including newline). If None, auto-detected.
-    newline : str | bytes, default "\\n"
-        Newline character(s) used in the file.
-    chunk_size : int | None, optional
-        Number of rows per internal batch. If None, inferred by Rust parser.
-    parallel : bool, default True
-        Use multi-threaded parsing in the Rust core.
-
-    Returns
-    -------
-    pl.LazyFrame
-        A Polars LazyFrame.
     """
     newline_bytes = newline if isinstance(newline, bytes) else newline.encode("utf-8")
 
