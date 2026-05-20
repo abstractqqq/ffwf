@@ -2,12 +2,13 @@ import os
 
 import polars as pl
 
-import polars_fwf as pfwf
+import ffwf as fw
+import ffwf.polars as plfw
 
 
-def test_nan_handling():
+def test_nan_handling_pl():
     specs = [
-        pfwf.FieldSpec("val", 0, 10, pfwf.DType.F64),
+        fw.FieldSpec("val", 0, 10, fw.DType.F64),
     ]
     path = "data/nan_test.fwf"
     os.makedirs("data", exist_ok=True)
@@ -26,7 +27,7 @@ def test_nan_handling():
         f.writelines(lines)
 
     print(f"Reading {path} with F64 spec...")
-    df = pfwf.read_fwf(path, specs)
+    df = plfw.read_fwf_pl(path, specs)
     print("DataFrame:")
     print(df)
 
@@ -42,4 +43,4 @@ def test_nan_handling():
 
 
 if __name__ == "__main__":
-    test_nan_handling()
+    test_nan_handling_pl()

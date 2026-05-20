@@ -1,13 +1,14 @@
 import os
 
-import polars_fwf as pfwf
+import ffwf as fw
+import ffwf.polars as plfw
 
 
-def test_read():
+def test_read_pl():
     specs = [
-        pfwf.FieldSpec("id", 0, 5, pfwf.DType.I32),
-        pfwf.FieldSpec("val", 5, 10, pfwf.DType.F64),
-        pfwf.FieldSpec("tag", 15, 5, pfwf.DType.String),
+        fw.FieldSpec("id", 0, 5, fw.DType.I32),
+        fw.FieldSpec("val", 5, 10, fw.DType.F64),
+        fw.FieldSpec("tag", 15, 5, fw.DType.String),
     ]
 
     # Ensure test data is written with LF (\n)
@@ -16,7 +17,7 @@ def test_read():
     with open(path, "wb") as f:
         f.write(b"00001      1.23 ABC \n00002      4.56 DEF \n00003      7.89 GHI \n")
 
-    df = pfwf.read_fwf(path, specs)
+    df = plfw.read_fwf_pl(path, specs)
     print("DataFrame:")
     print(df)
 
@@ -26,7 +27,7 @@ def test_read():
     print("Python test passed!")
 
 
-def test_partial_specs():
+def test_partial_specs_pl():
     path = "data/partial_test.fwf"
     os.makedirs("data", exist_ok=True)
     with open(path, "wb") as f:
@@ -36,23 +37,23 @@ def test_partial_specs():
     # Partial spec: only col 1 (0-3) and col 2 (6-9)
     # Total width = 3 + 3 = 6. Line width = 10. Gaps at 3-6 and 9-10.
     specs = [
-        pfwf.FieldSpec("c1", 0, 3, "str"),
-        pfwf.FieldSpec("c2", 6, 3, "str"),
+        fw.FieldSpec("c1", 0, 3, "str"),
+        fw.FieldSpec("c2", 6, 3, "str"),
     ]
 
     # Test Eager
-    df_eager = pfwf.read_fwf(path, specs)
+    df_eager = plfw.read_fwf_pl(path, specs)
     assert df_eager.shape == (2, 2)
     assert df_eager["c1"].to_list() == ["123", "ABC"]
     assert df_eager["c2"].to_list() == ["789", "GHI"]
 
     # Test Lazy
-    df_lazy = pfwf.scan_fwf(path, specs).collect()
+    df_lazy = plfw.scan_fwf_pl(path, specs).collect()
     assert df_lazy.shape == (2, 2)
     assert df_lazy["c1"].to_list() == ["123", "ABC"]
     assert df_lazy["c2"].to_list() == ["789", "GHI"]
 
 
 if __name__ == "__main__":
-    test_read()
-    test_partial_specs()
+    test_read_pl()
+    test_partial_specs_pl()
