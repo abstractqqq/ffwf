@@ -32,11 +32,12 @@ def read_fwf_pd(
     path : str
         Path to the FWF file.
     specs : Sequence[PyFieldSpec]
-        List of field specifications.
+        List of field specifications defining column names, offsets, lengths, and types.
     line_length : int | None, optional
-        The total length of each line in bytes.
+        The total length of each line in bytes (including newline). If None, it is
+        automatically detected.
     newline : str | bytes, default "\\n"
-        Newline character(s).
+        The newline character(s) used in the file.
     chunk_size : int | None, optional
         Number of rows per internal batch.
     parallel : bool, default True

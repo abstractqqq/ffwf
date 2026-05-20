@@ -22,6 +22,7 @@ __all__ = [
     "FieldSpec",
     "DType",
     "read_fwf_arrow",
+    "ArrowCapsule",
 ]
 
 
@@ -132,6 +133,27 @@ def read_fwf_arrow(
 ) -> pa.Table:
     """
     Read a fixed-width file into a PyArrow Table using zero-copy Arrow transfer.
+
+    Parameters
+    ----------
+    path : str
+        Path to the FWF file.
+    specs : Sequence[PyFieldSpec]
+        List of field specifications defining column names, offsets, lengths, and types.
+    line_length : int | None, optional
+        The total length of each line in bytes (including newline). If None, it is
+        automatically detected.
+    newline : str | bytes, default "\\n"
+        The newline character(s) used in the file.
+    chunk_size : int | None, optional
+        The number of rows to parse per batch. If None, it's inferred by the core parser.
+    parallel : bool, default True
+        Whether to use multi-threaded parsing in the Rust core.
+
+    Returns
+    -------
+    pa.Table
+        A PyArrow Table containing the parsed data.
     """
 
     # DType to arrow mapping helper

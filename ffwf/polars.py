@@ -4,24 +4,13 @@ from typing import TYPE_CHECKING, Any, Iterator, Sequence
 
 import polars as pl
 
-
-# Manual version check to avoid extra dependency
-def _check_pl_version():
-    v = pl.__version__.split(".")
-    major = int(v[0])
-    minor = int(v[1])
-    if major < 1 or (major == 1 and minor < 34):
-        raise ImportError(
-            f"ffwf.polars requires polars >= 1.34, found {pl.__version__}"
-        )
-
-
-_check_pl_version()
+if tuple(map(int, pl.__version__.split(".")[:2])) < (1, 34):
+    raise ImportError(f"ffwf.polars requires polars >= 1.34, found {pl.__version__}")
 
 import polars.selectors as cs
 from polars.io.plugins import register_io_source
 
-from . import DType, FieldSpec, FwfParser, FwfReader, PyFieldSpec
+from . import ArrowCapsule, DType, FieldSpec, FwfParser, FwfReader, PyFieldSpec
 
 __all__ = [
     "read_fwf_pl",
@@ -30,28 +19,9 @@ __all__ = [
     "sink_fwf_pl",
 ]
 
-
-class ArrowCapsule:
-    """
-    Internal adapter to bridge Arrow C Data Interface capsules with Polars.
-    """
-
-    def __init__(self, capsules: tuple):
-        """
-        Initialize the adapter with a tuple of (array_capsule, schema_capsule).
-
-        Parameters
-        ----------
-        capsules : tuple
-            A tuple containing the Arrow C Data Interface capsules.
-        """
-        self.array_capsule, self.schema_capsule = capsules
-
-    def __arrow_c_array__(self, requested_schema=None):
-        """
-        Implement the Arrow C Data Interface protocol.
-        """
-        return self.schema_capsule, self.array_capsule
+# ==============================================================================
+# Polars IO Source (Lazy)
+# ==============================================================================
 
 
 class FwfSource:
@@ -153,7 +123,171 @@ class FwfSource:
                     return
 
 
-def _check_supported_types(df_or_lf: pl.DataFrame | pl.LazyFrame):
+# ==============================================================================
+# Reading (Eager & Lazy)
+# ==============================================================================
+
+
+def _dtype_to_pl(dtype: DType) -> pl.DataType:
+    """
+    Convert an internal DType to a Polars DataType.
+    """
+    if dtype == DType.I8:
+        return pl.Int8
+    if dtype == DType.I16:
+        return pl.Int16
+    if dtype == DType.I32:
+        return pl.Int32
+    if dtype == DType.I64:
+        return pl.Int64
+    if dtype == DType.U8:
+        return pl.UInt8
+    if dtype == DType.U16:
+        return pl.UInt16
+    if dtype == DType.U32:
+        return pl.UInt32
+    if dtype == DType.U64:
+        return pl.UInt64
+    if dtype == DType.F32:
+        return pl.Float32
+    if dtype == DType.F64:
+        return pl.Float64
+    if dtype == DType.String:
+        return pl.String
+    raise ValueError(f"Unknown DType: {dtype}")
+
+
+def read_fwf_pl(
+    path: str,
+    specs: Sequence[PyFieldSpec],
+    line_length: int | None = None,
+    newline: str | bytes = "\n",
+    chunk_size: int | None = None,
+    parallel: bool = True,
+) -> pl.DataFrame:
+    """
+    Read a fixed-width file into a Polars DataFrame.
+
+    Parameters
+    ----------
+    path : str
+        Path to the FWF file.
+    specs : Sequence[PyFieldSpec]
+        List of field specifications defining column names, offsets, lengths, and types.
+    line_length : int | None, optional
+        The total length of each line in bytes (including newline). If None, it is
+        automatically detected.
+    newline : str | bytes, default "\\n"
+        The newline character(s) used in the file.
+    chunk_size : int | None, optional
+        The number of rows to parse per batch. If None, it's inferred by the core parser.
+    parallel : bool, default True
+        Whether to use multi-threaded parsing in the Rust core.
+
+    Returns
+    -------
+    pl.DataFrame
+        A Polars DataFrame containing the parsed data.
+
+    Examples
+    --------
+    >>> import ffwf as fw
+    >>> import ffwf.polars as plfw
+    >>> specs = [fw.FieldSpec("id", 0, 5, "int"), fw.FieldSpec("val", 5, 10, "f64")]
+    >>> df = plfw.read_fwf_pl("data.fwf", specs)
+    """
+    newline_bytes = newline if isinstance(newline, bytes) else newline.encode("utf-8")
+    stride, data_len = FwfParser.detect_line_length(path, newline_bytes)
+
+    actual_stride = line_length if line_length is not None else stride
+    actual_data_len = actual_stride - len(newline_bytes)
+
+    # Validate that all specs are within bounds
+    for s in specs:
+        if s.offset + s.length > actual_data_len:
+            raise ValueError(
+                f"FieldSpec '{s.name}' (offset={s.offset}, length={s.length}) "
+                f"exceeds data length ({actual_data_len})."
+            )
+
+    # EAGER PATH: Use the optimized parallel parser for maximum throughput
+    parser = FwfParser(
+        list(specs),
+        actual_stride,
+        parallel=parallel,
+        chunk_size=chunk_size,
+    )
+
+    # _parse_path handles the mmap and multi-threading internally in one go
+    capsule_tuples = parser._parse_path(path)
+
+    if not capsule_tuples:
+        # Return empty frame with correct schema
+        return pl.DataFrame(schema={s.name: _dtype_to_pl(s.dtype) for s in specs})
+
+    dfs = [pl.from_arrow(ArrowCapsule(c)) for c in capsule_tuples]
+    return pl.concat(dfs, how="vertical")
+
+
+def scan_fwf_pl(
+    path: str,
+    specs: Sequence[PyFieldSpec],
+    line_length: int | None = None,
+    newline: str | bytes = "\n",
+    chunk_size: int | None = None,
+    parallel: bool = True,
+) -> pl.LazyFrame:
+    """
+    Lazily scan a fixed-width file into a Polars LazyFrame.
+
+    Parameters
+    ----------
+    path : str
+        Path to the FWF file.
+    specs : Sequence[PyFieldSpec]
+        List of field specifications defining column names, offsets, lengths, and types.
+    line_length : int | None, optional
+        The total length of each line in bytes (including newline). If None, it is
+        automatically detected.
+    newline : str | bytes, default "\\n"
+        The newline character(s) used in the file.
+    chunk_size : int | None, optional
+        The number of rows to parse per batch. If None, it's inferred by the core parser.
+    parallel : bool, default True
+        Whether to use multi-threaded parsing in the Rust core.
+
+    Returns
+    -------
+    pl.LazyFrame
+        A Polars LazyFrame representing the scan.
+
+    Examples
+    --------
+    >>> import ffwf as fw
+    >>> import ffwf.polars as plfw
+    >>> specs = [fw.FieldSpec("id", 0, 5, "int")]
+    >>> lf = plfw.scan_fwf_pl("data.fwf", specs)
+    >>> df = lf.filter(pl.col("id") > 100).collect()
+    """
+    newline_bytes = newline if isinstance(newline, bytes) else newline.encode("utf-8")
+
+    if line_length is None:
+        line_length, _ = FwfParser.detect_line_length(path, newline_bytes)
+
+    schema = pl.Schema({s.name: _dtype_to_pl(s.dtype) for s in specs})
+
+    return register_io_source(
+        io_source=FwfSource(path, specs, line_length, chunk_size, parallel),
+        schema=schema,
+    )
+
+
+# ==============================================================================
+# Writing (Eager & Streaming)
+# ==============================================================================
+
+
+def _check_supported_types(df: pl.DataFrame | pl.LazyFrame):
     """
     Verify that all columns in the input have types supported by the FWF writer.
     """
@@ -165,7 +299,7 @@ def _check_supported_types(df_or_lf: pl.DataFrame | pl.LazyFrame):
         | cs.categorical()
         | cs.enum()
     )
-    unsupported_schema = df_or_lf.select(~supported).collect_schema()
+    unsupported_schema = df.select(~supported).collect_schema()
     if len(unsupported_schema) > 0:
         raise TypeError(f"Unsupported column type(s) for FWF: {unsupported_schema}")
 
@@ -404,6 +538,36 @@ def write_fwf_pl(
 ) -> dict[str, dict]:
     """
     Write a Polars DataFrame or LazyFrame to a Fixed-Width File (FWF) eagerly.
+
+    Parameters
+    ----------
+    df : pl.DataFrame | pl.LazyFrame
+        The DataFrame or LazyFrame to write.
+    path : str
+        The path to the output file.
+    specs : Sequence[PyFieldSpec] | None, optional
+        A sequence of FieldSpec objects defining the output layout.
+        If None, the specification is inferred from the data.
+    number_padding : str, default " "
+        The padding character for numeric columns (right-aligned).
+    str_padding : str, default " "
+        The padding character for string columns.
+    pad_str_end : bool, default True
+        If True, string columns are left-aligned (padded at the end).
+        If False, string columns are right-aligned (padded at the start).
+    decimals : int, default 3
+        The precision for float columns. Floats are rounded to this value.
+    bool_treatment : tuple[str, str, str], default ("T", "F", "null")
+        The string representations for True, False, and Null boolean values.
+    simple_dtypes : bool, default True
+        If True, the returned specification dictionary uses simplified
+        dtype names ('int', 'str', 'f64', 'bool').
+
+    Returns
+    -------
+    dict[str, dict]
+        The specification used to write the file, mapping column names
+        to {offset, length, dtype}.
     """
     _check_supported_types(df)
     bool_treatment = _validate_bool_treatment(bool_treatment)
@@ -453,10 +617,52 @@ def sink_fwf_pl(
     decimals: int = 3,
     bool_treatment: tuple[str, str, str] = ("T", "F", "null"),
     simple_dtypes: bool = True,
-    infer_specs_rows: int | None = 100,
+    infer_specs_rows: int | None = 1000,
 ) -> dict[str, dict]:
     """
-    Write a Polars LazyFrame to a Fixed-Width File (FWF) using streaming (collect_batches).
+    Stream a Polars LazyFrame to a Fixed-Width File (FWF).
+
+    This function processes the data in batches to keep memory usage low,
+    making it suitable for very large datasets.
+
+    Parameters
+    ----------
+    lf : pl.LazyFrame
+        The LazyFrame to write.
+    path : str
+        The path to the output file.
+    specs : Sequence[PyFieldSpec] | None, optional
+        A sequence of FieldSpec objects defining the output layout.
+        If None, the specification is inferred from the first `infer_specs_rows`.
+    number_padding : str, default " "
+        The padding character for numeric columns (right-aligned).
+    str_padding : str, default " "
+        The padding character for string columns.
+    pad_str_end : bool, default True
+        If True, string columns are left-aligned (padded at the end).
+        If False, string columns are right-aligned (padded at the start).
+    decimals : int, default 3
+        The precision for float columns. Floats are rounded to this value.
+    bool_treatment : tuple[str, str, str], default ("T", "F", "null")
+        The string representations for True, False, and Null boolean values.
+    simple_dtypes : bool, default True
+        If True, the returned specification dictionary uses simplified
+        dtype names ('int', 'str', 'f64', 'bool').
+    infer_specs_rows : int | None, default 1000
+        Number of rows to use for schema inference if `specs` is None.
+
+    Returns
+    -------
+    dict[str, dict]
+        The specification used to write the file, mapping column names
+        to {offset, length, dtype}.
+
+    Examples
+    --------
+    >>> import polars as pl
+    >>> import ffwf.polars as plfw
+    >>> lf = pl.LazyFrame({"a": range(1000000)})
+    >>> plfw.sink_fwf_pl(lf, "large.fwf", decimals=2)
     """
     _check_supported_types(lf)
     bool_treatment = _validate_bool_treatment(bool_treatment)
@@ -499,100 +705,3 @@ def sink_fwf_pl(
             current_row += len(batch)
 
     return _build_spec_map(final_specs, lf.collect_schema(), simple_dtypes)
-
-
-def read_fwf_pl(
-    path: str,
-    specs: Sequence[PyFieldSpec],
-    line_length: int | None = None,
-    newline: str | bytes = "\n",
-    chunk_size: int | None = None,
-    parallel: bool = True,
-) -> pl.DataFrame:
-    """
-    Read a fixed-width file into a Polars DataFrame using zero-copy Arrow transfer.
-    """
-    newline_bytes = newline if isinstance(newline, bytes) else newline.encode("utf-8")
-    stride, data_len = FwfParser.detect_line_length(path, newline_bytes)
-
-    actual_stride = line_length if line_length is not None else stride
-    actual_data_len = actual_stride - len(newline_bytes)
-
-    # Validate that all specs are within bounds
-    for s in specs:
-        if s.offset + s.length > actual_data_len:
-            raise ValueError(
-                f"FieldSpec '{s.name}' (offset={s.offset}, length={s.length}) "
-                f"exceeds data length ({actual_data_len})."
-            )
-
-    # EAGER PATH: Use the optimized parallel parser for maximum throughput
-    parser = FwfParser(
-        list(specs),
-        actual_stride,
-        parallel=parallel,
-        chunk_size=chunk_size,
-    )
-
-    # _parse_path handles the mmap and multi-threading internally in one go
-    capsule_tuples = parser._parse_path(path)
-
-    if not capsule_tuples:
-        # Return empty frame with correct schema
-        return pl.DataFrame(schema={s.name: _dtype_to_pl(s.dtype) for s in specs})
-
-    dfs = [pl.from_arrow(ArrowCapsule(c)) for c in capsule_tuples]
-    return pl.concat(dfs, how="vertical")
-
-
-def scan_fwf_pl(
-    path: str,
-    specs: Sequence[PyFieldSpec],
-    line_length: int | None = None,
-    newline: str | bytes = "\n",
-    chunk_size: int | None = None,
-    parallel: bool = True,
-) -> pl.LazyFrame:
-    """
-    Scan a fixed-width file lazily using Polars IO Plugin interface.
-    """
-    newline_bytes = newline if isinstance(newline, bytes) else newline.encode("utf-8")
-
-    if line_length is None:
-        line_length, _ = FwfParser.detect_line_length(path, newline_bytes)
-
-    schema = pl.Schema({s.name: _dtype_to_pl(s.dtype) for s in specs})
-
-    return register_io_source(
-        io_source=FwfSource(path, specs, line_length, chunk_size, parallel),
-        schema=schema,
-    )
-
-
-def _dtype_to_pl(dtype: DType) -> pl.DataType:
-    """
-    Convert an internal DType to a Polars DataType.
-    """
-    if dtype == DType.I8:
-        return pl.Int8
-    if dtype == DType.I16:
-        return pl.Int16
-    if dtype == DType.I32:
-        return pl.Int32
-    if dtype == DType.I64:
-        return pl.Int64
-    if dtype == DType.U8:
-        return pl.UInt8
-    if dtype == DType.U16:
-        return pl.UInt16
-    if dtype == DType.U32:
-        return pl.UInt32
-    if dtype == DType.U64:
-        return pl.UInt64
-    if dtype == DType.F32:
-        return pl.Float32
-    if dtype == DType.F64:
-        return pl.Float64
-    if dtype == DType.String:
-        return pl.String
-    raise ValueError(f"Unknown DType: {dtype}")
