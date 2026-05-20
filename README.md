@@ -124,6 +124,17 @@ The following benchmarks compare `ffwf` against `pandas.read_fwf` (v2.2.3) using
 
 *Benchmarks conducted on a 16-core machine. ffwf is **~170x faster** than Pandas for pure reading and **~200x faster** for filtered pipelines.*
 
+### Visualization
+
+#### Reading Benchmark
+![Reading Benchmark](plots/read_benchmark.png)
+
+#### Pipeline Benchmark
+![Pipeline Benchmark](plots/pipeline_benchmark.png)
+
+#### Aggregation Benchmark
+![Aggregation Benchmark](plots/agg_benchmark.png)
+
 ## Integration with Other Dataframe Packages
 
 The core of `ffwf` is designed to be dataframe-agnostic by returning zero-copy PyArrow Tables. If you use a dataframe library other than Polars or Pandas (e.g., DuckDB, Daft, Modin), you can easily integrate it yourself as long as the library supports the [Arrow C Data Interface](https://arrow.apache.org/docs/format/CDataInterface.html).

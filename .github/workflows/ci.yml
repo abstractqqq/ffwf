@@ -3,9 +3,23 @@ name: CI
 on:
   push:
     branches: [main, master]
+    paths:
+      - "ffwf/**"
+      - "src/**"
+      - "pyproject.toml"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "tests/**"
   pull_request:
     branches: [main, master]
     types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - "ffwf/**"
+      - "src/**"
+      - "pyproject.toml"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "tests/**"
 
 # Cancel in-progress runs when a new push is made to the same branch/PR
 concurrency:
