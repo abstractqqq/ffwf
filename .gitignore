@@ -22,7 +22,7 @@ htmlcov/
 
 # Local data & benchmarks
 data/*.fwf
-plots/*.png
+# plots/*.png
 
 # IDEs & OS
 .vscode/
