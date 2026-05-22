@@ -5,7 +5,6 @@ import polars as pl
 import pytest
 
 import ffwf as fw
-import ffwf.polars as plfw
 
 
 def test_write_fwf_basic_pl(tmp_path):
@@ -20,7 +19,7 @@ def test_write_fwf_basic_pl(tmp_path):
     )
 
     # Test inference
-    specs_dict = plfw.write_fwf_pl(df, path)
+    specs_dict = fw.write_fwf_pl(df, path)
 
     assert "id" in specs_dict
     assert "name" in specs_dict
@@ -46,7 +45,7 @@ def test_write_fwf_basic_pl(tmp_path):
         ),
     ]
 
-    df_read = plfw.read_fwf_pl(path, specs)
+    df_read = fw.read_fwf_pl(path, specs)
     assert df_read.shape == (3, 4)
     assert df_read["id"].to_list() == [1, 2, 100]
     assert [s.strip() for s in df_read["name"]] == ["Alice", "Bob", "Charlie"]
@@ -58,7 +57,7 @@ def test_write_fwf_specs_pl(tmp_path):
 
     specs = [fw.FieldSpec("a", 0, 5, "int"), fw.FieldSpec("b", 5, 5, "str")]
 
-    plfw.write_fwf_pl(df, path, specs=specs)
+    fw.write_fwf_pl(df, path, specs=specs)
 
     with open(path, "rb") as f:
         lines = f.readlines()
@@ -72,7 +71,7 @@ def test_write_fwf_validation_pl(tmp_path):
     specs = [fw.FieldSpec("a", 0, 2, "int")]  # 1000 needs 4 chars
 
     with pytest.raises(ValueError, match="has data longer"):
-        plfw.write_fwf_pl(df, path, specs=specs)
+        fw.write_fwf_pl(df, path, specs=specs)
 
 
 def test_write_fwf_contiguity_pl():
@@ -82,19 +81,19 @@ def test_write_fwf_contiguity_pl():
         fw.FieldSpec("b", 10, 5, "int"),  # Gap between 5 and 10
     ]
     with pytest.raises(ValueError, match="not contiguous"):
-        plfw.write_fwf_pl(df, "dummy", specs=specs)
+        fw.write_fwf_pl(df, "dummy", specs=specs)
 
 
 def test_write_fwf_unsupported_type_pl():
     df = pl.DataFrame({"a": [datetime.date(2023, 1, 1)]})
     with pytest.raises(TypeError, match="Unsupported column type"):
-        plfw.write_fwf_pl(df, "dummy")
+        fw.write_fwf_pl(df, "dummy")
 
 
 def test_write_fwf_bool_treatment_pl(tmp_path):
     path = str(tmp_path / "bool.fwf")
     df = pl.DataFrame({"a": [True, False, None]})
-    plfw.write_fwf_pl(df, path, bool_treatment=("YES", "NO ", "---"))
+    fw.write_fwf_pl(df, path, bool_treatment=("YES", "NO ", "---"))
 
     with open(path, "rb") as f:
         lines = f.readlines()
@@ -107,7 +106,7 @@ def test_sink_fwf_pl(tmp_path):
     path = str(tmp_path / "sink.fwf")
     lf = pl.DataFrame({"a": [1, 2]}).lazy()
     specs = [fw.FieldSpec("a", 0, 5, "int")]
-    plfw.sink_fwf_pl(lf, path, specs=specs)
+    fw.sink_fwf_pl(lf, path, specs=specs)
     with open(path, "rb") as f:
         assert f.readline() == b"    1\n"
 
@@ -125,7 +124,7 @@ def test_sink_fwf_batch_validation_pl(tmp_path):
         ValueError,
         match=r"failed validation: Column 'a' has data longer \(4\) than specified length \(2\)",
     ):
-        plfw.sink_fwf_pl(lf, path, specs=specs)
+        fw.sink_fwf_pl(lf, path, specs=specs)
 
 
 def test_write_fwf_large_floats_pl(tmp_path):
@@ -134,7 +133,7 @@ def test_write_fwf_large_floats_pl(tmp_path):
     df = pl.DataFrame({"val": [1.23456789e300, 1.23456789e-10]})
 
     # Test with 2 decimals
-    specs_dict = plfw.write_fwf_pl(df, path, decimals=2)
+    specs_dict = fw.write_fwf_pl(df, path, decimals=2)
 
     with open(path, "rb") as f:
         lines = f.readlines()
@@ -150,14 +149,14 @@ def test_write_fwf_float_width_validation_pl(tmp_path):
     specs = [fw.FieldSpec("val", 0, 5, "f64")]
 
     with pytest.raises(ValueError, match="has data longer"):
-        plfw.write_fwf_pl(df, path, specs=specs, decimals=2)
+        fw.write_fwf_pl(df, path, specs=specs, decimals=2)
 
 
 def test_write_fwf_nan_inf_pl(tmp_path):
     path = str(tmp_path / "nan_inf.fwf")
     df = pl.DataFrame({"val": [float("nan"), float("inf")]})
     specs = [fw.FieldSpec("val", 0, 10, "f64")]
-    plfw.write_fwf_pl(df, path, specs=specs)
+    fw.write_fwf_pl(df, path, specs=specs)
 
     with open(path, "rb") as f:
         lines = f.readlines()
@@ -170,7 +169,7 @@ def test_write_fwf_truncation_logic_pl(tmp_path):
     # 1.999 rounded to 1 decimal should be 2.0
     df = pl.DataFrame({"val": [1.999]})
     specs = [fw.FieldSpec("val", 0, 5, "f64")]
-    plfw.write_fwf_pl(df, path, specs=specs, decimals=1)
+    fw.write_fwf_pl(df, path, specs=specs, decimals=1)
 
     with open(path, "rb") as f:
         line = f.read().rstrip(b"\n")
@@ -182,7 +181,7 @@ def test_write_fwf_truncation_zero_decimals_pl(tmp_path):
     df = pl.DataFrame({"val": [1.99, -1.99]})
 
     specs = [fw.FieldSpec("val", 0, 10, "f64")]
-    plfw.write_fwf_pl(df, path, specs=specs, decimals=0)
+    fw.write_fwf_pl(df, path, specs=specs, decimals=0)
 
     with open(path, "rb") as f:
         lines = f.readlines()
@@ -201,7 +200,7 @@ def test_write_fwf_f32_bounds_pl(tmp_path):
 
     # Spec says f32, but we only validate width now
     specs = [fw.FieldSpec("val", 0, 20, "f32")]
-    plfw.write_fwf_pl(df, path, specs=specs)
+    fw.write_fwf_pl(df, path, specs=specs)
 
     with open(path, "rb") as f:
         line = f.read().strip()
@@ -216,7 +215,7 @@ def test_write_fwf_negatives_pl(tmp_path):
     # Specs with enough width for signs
     specs = [fw.FieldSpec("i", 0, 5, "int"), fw.FieldSpec("f", 5, 8, "float")]
 
-    plfw.write_fwf_pl(df, path, specs=specs, decimals=2)
+    fw.write_fwf_pl(df, path, specs=specs, decimals=2)
 
     with open(path, "rb") as f:
         lines = f.readlines()

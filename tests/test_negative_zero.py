@@ -5,7 +5,6 @@ import polars as pl
 import pytest
 
 import ffwf as fw
-import ffwf.polars as plfw
 
 
 def test_negative_zero_handling_pl(tmp_path):
@@ -19,7 +18,7 @@ def test_negative_zero_handling_pl(tmp_path):
     specs = [fw.FieldSpec("i", 0, 2, "int"), fw.FieldSpec("f", 2, 4, "float")]
 
     # 2. Read back
-    df = plfw.read_fwf_pl(path, specs)
+    df = fw.read_fwf_pl(path, specs)
 
     # Integers: -0 is just 0
     assert df["i"][0] == 0
@@ -41,7 +40,7 @@ def test_write_negative_zero_pl(tmp_path):
     # Spec width 4 is enough for "-0.0" (standard polars string repr)
     specs = [fw.FieldSpec("f", 0, 4, "float")]
 
-    plfw.write_fwf_pl(df, path, specs=specs, decimals=1)
+    fw.write_fwf_pl(df, path, specs=specs, decimals=1)
 
     with open(path, "rb") as f:
         line = f.read()
@@ -59,7 +58,7 @@ def test_write_negative_zero_validation_fail_pl(tmp_path):
     with pytest.raises(
         ValueError, match=r"has data longer \(4\) than specified length \(3\)"
     ):
-        plfw.write_fwf_pl(df, path, specs=specs, decimals=1)
+        fw.write_fwf_pl(df, path, specs=specs, decimals=1)
 
 
 if __name__ == "__main__":

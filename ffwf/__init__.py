@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Sequence
 
 import pyarrow as pa
 
-from ._fwf import DType, FwfParser, FwfReader, PyFieldSpec
+from ._fwf import DType, ErrorStrategy, FwfParser, FwfReader, PyFieldSpec
 
 try:
     __version__ = importlib.metadata.version("ffwf")
@@ -21,6 +21,7 @@ __all__ = [
     "FwfParser",
     "FieldSpec",
     "DType",
+    "ErrorStrategy",
     "read_fwf_arrow",
     "ArrowCapsule",
 ]
@@ -32,6 +33,7 @@ def FieldSpec(
     length: int,
     dtype: DType | str,
     padding: int | None = None,
+    error_strategy: ErrorStrategy = ErrorStrategy.PushNull(),
 ) -> PyFieldSpec:
     """
     Define a field specification for a fixed-width file.
@@ -44,16 +46,31 @@ def FieldSpec(
         The starting byte offset of the field.
     length : int
         The length of the field in bytes.
+        For strings, this is the **byte length**, not the character count.
     dtype : DType | str
         The data type of the field. Can be a DType enum or a string alias
         like 'str', 'int', 'f64', etc.
     padding : int | None, optional
-        Optional padding byte.
+        Optional padding byte. Defaults to space.
+    error_strategy : ErrorStrategy, optional
+        How to handle parsing errors for this field. Defaults to `PushNull()`.
+        If using `Fill(bytes)`, the value must be a byte string valid for the
+        target dtype and fit within the field length.
 
     Returns
     -------
     PyFieldSpec
         An internal field specification object.
+
+    Examples
+    --------
+    >>> import ffwf as fw
+    >>> # Basic integer field
+    >>> s1 = fw.FieldSpec("id", 0, 5, "int")
+    >>> # Integer with Fill strategy (uses 0 as fallback)
+    >>> s2 = fw.FieldSpec("val", 5, 5, "int", error_strategy=fw.ErrorStrategy.Fill(b"0    "))
+    >>> # String with Fill strategy (uses "N/A" as fallback)
+    >>> s3 = fw.FieldSpec("tag", 10, 5, "str", error_strategy=fw.ErrorStrategy.Fill(b"N/A  "))
     """
     if isinstance(dtype, str):
         dtype_lower = dtype.lower()
@@ -97,7 +114,7 @@ def FieldSpec(
             stacklevel=2,
         )
 
-    return PyFieldSpec(name, offset, length, resolved_dtype, padding)
+    return PyFieldSpec(name, offset, length, resolved_dtype, padding, error_strategy)
 
 
 class ArrowCapsule:
@@ -218,3 +235,20 @@ def read_fwf_arrow(
 
     batches = [pa.record_batch(ArrowCapsule(c)) for c in capsule_tuples]
     return pa.Table.from_batches(batches)
+
+
+# Polars support
+try:
+    from .polars import read_fwf_pl, scan_fwf_pl, sink_fwf_pl, write_fwf_pl
+
+    __all__ += ["read_fwf_pl", "scan_fwf_pl", "write_fwf_pl", "sink_fwf_pl"]
+except ImportError:
+    pass
+
+# Pandas support
+try:
+    from .pandas import read_fwf_pd
+
+    __all__ += ["read_fwf_pd"]
+except ImportError:
+    pass
