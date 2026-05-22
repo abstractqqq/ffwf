@@ -3,7 +3,6 @@ import os
 import pandas as pd
 
 import ffwf as fw
-import ffwf.pandas as pdfw
 
 
 def test_read_fwf_pd():
@@ -18,7 +17,7 @@ def test_read_fwf_pd():
     with open(path, "wb") as f:
         f.write(b"00001      1.23 ABC \n00002      4.56 DEF \n00003      7.89 GHI \n")
 
-    df = pdfw.read_fwf_pd(path, specs)
+    df = fw.read_fwf_pd(path, specs)
 
     assert isinstance(df, pd.DataFrame)
     assert df.shape == (3, 3)

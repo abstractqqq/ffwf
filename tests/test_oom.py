@@ -4,7 +4,6 @@ import time
 import polars as pl
 
 import ffwf as fw
-import ffwf.polars as plfw
 
 
 def generate_data(path, num_rows):
@@ -29,7 +28,7 @@ def test_lazy_large_file_stability_pl():
     print("\n--- Large File Stability Test ---")
 
     start = time.perf_counter()
-    lf = plfw.scan_fwf_pl(path, specs)
+    lf = fw.scan_fwf_pl(path, specs)
     print("Schema:", lf.collect_schema())
 
     df = lf.filter(pl.col("state") == "NY").collect()

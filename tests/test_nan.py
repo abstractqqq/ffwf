@@ -3,7 +3,6 @@ import os
 import polars as pl
 
 import ffwf as fw
-import ffwf.polars as plfw
 
 
 def test_nan_handling_pl():
@@ -27,7 +26,7 @@ def test_nan_handling_pl():
         f.writelines(lines)
 
     print(f"Reading {path} with F64 spec...")
-    df = plfw.read_fwf_pl(path, specs)
+    df = fw.read_fwf_pl(path, specs)
     print("DataFrame:")
     print(df)
 

@@ -35,12 +35,11 @@ table = fw.read_fwf_arrow("data.fwf", specs)
 
 ### Polars (Highly Recommended)
 
-Unlock the best performance and streaming capabilities. Polars functions are in `ffwf.polars` with a `_pl` suffix.
+Unlock the best performance and streaming capabilities. Polars functions are available directly from `ffwf`.
 
 ```python
 import polars as pl
 import ffwf as fw
-import ffwf.polars as plfw
 
 # 1. Define field specifications
 specs = [
@@ -50,42 +49,41 @@ specs = [
 ]
 
 # 2. Eager parsing (returns pl.DataFrame)
-df = plfw.read_fwf_pl("data.fwf", specs)
+df = fw.read_fwf_pl("data.fwf", specs)
 
 # 3. Lazy parsing (returns pl.LazyFrame)
-lazy_df = plfw.scan_fwf_pl("data.fwf", specs)
+lazy_df = fw.scan_fwf_pl("data.fwf", specs)
 
 result = lazy_df.filter(pl.col("val") > 100.0).group_by("tag").count().collect()
 ```
 
 ### Pandas
 
-For existing Pandas workflows, `ffwf.pandas` provides a simple wrapper that parses via Arrow.
+For existing Pandas workflows, `ffwf` provides a simple wrapper that parses via Arrow.
 
 ```python
 import ffwf as fw
-import ffwf.pandas as pdfw
 
 specs = [fw.FieldSpec("id", 0, 5, "int")]
-df = pdfw.read_fwf_pd("data.fwf", specs)
+df = fw.read_fwf_pd("data.fwf", specs)
 ```
 
 ## Writing Fixed-Width Files (Polars)
 
-`ffwf.polars` provides eager (`write_fwf_pl`) and streaming (`sink_fwf_pl`) writers.
+`ffwf` provides eager (`write_fwf_pl`) and streaming (`sink_fwf_pl`) writers.
 
 ### Eager Writing (DataFrame)
 
 ```python
 # Automatic inference of widths and types
-specs = plfw.write_fwf_pl(df, "output.fwf")
+specs = fw.write_fwf_pl(df, "output.fwf")
 
 # Explicit specification
 specs = [
     fw.FieldSpec("id", 0, 5, "int"),
     fw.FieldSpec("val", 5, 10, "float")
 ]
-plfw.write_fwf_pl(df, "output.fwf", specs=specs)
+fw.write_fwf_pl(df, "output.fwf", specs=specs)
 ```
 
 ### Streaming Writing (LazyFrame)
@@ -94,7 +92,7 @@ For large datasets, use `sink_fwf_pl` to validate and write data batch-by-batch 
 
 ```python
 # Streaming write
-plfw.sink_fwf_pl(lazy_df, "large_output.fwf", decimals=2)
+fw.sink_fwf_pl(lazy_df, "large_output.fwf", decimals=2)
 ```
 
 ### Key Writing Features
@@ -155,7 +153,7 @@ table = fw.read_fwf_arrow("data.fwf", specs)
 
 ### Writing FWF
 
-Please note that **writing FWF files is only available with Polars** as of now, via `plfw.write_fwf_pl` and the streaming `plfw.sink_fwf_pl` variant.
+Please note that **writing FWF files is only available with Polars** as of now, via `fw.write_fwf_pl` and the streaming `fw.sink_fwf_pl` variant.
 
 ## Building Locally
 

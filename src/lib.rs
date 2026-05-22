@@ -62,38 +62,166 @@ impl From<PyDType> for core::DType {
     }
 }
 
+#[pyclass(name = "ErrorStrategy", eq)]
+#[derive(Clone, PartialEq)]
+pub enum PyErrorStrategy {
+    PushNull(),
+    Fill(Vec<u8>),
+}
+
+impl From<PyErrorStrategy> for core::ErrorStrategy {
+    fn from(s: PyErrorStrategy) -> Self {
+        match s {
+            PyErrorStrategy::PushNull() => core::ErrorStrategy::PushNull,
+            PyErrorStrategy::Fill(_) => {
+                panic!("PyErrorStrategy::Fill must be converted manually with dtype context")
+            }
+        }
+    }
+}
+
+#[pymethods]
+impl PyErrorStrategy {
+    fn __str__(&self) -> String {
+        match self {
+            PyErrorStrategy::PushNull() => "PushNull".to_string(),
+            PyErrorStrategy::Fill(v) => format!("Fill({:?})", v),
+        }
+    }
+}
+
 #[pyclass(name = "PyFieldSpec")]
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct PyFieldSpec {
+    /// The name of the field.
     #[pyo3(get, set)]
     pub name: String,
+    /// The byte offset from the start of the line where this field begins.
     #[pyo3(get, set)]
     pub offset: usize,
-    #[pyo3(get, set)]
+    /// The length of the field in bytes.
+    ///
+    /// For `DType::String`, this is the **byte length**, not the character count.
+    #[pyo3(get)]
     pub length: usize,
-    #[pyo3(get, set)]
+    /// The data type of the field.
+    #[pyo3(get)]
     pub dtype: PyDType,
+    /// Optional byte used for padding/trimming. Defaults to space (0x20).
     #[pyo3(get, set)]
     pub padding: Option<u8>,
+    /// The strategy used when a parsing error occurs.
+    #[pyo3(get)]
+    pub error_strategy: PyErrorStrategy,
 }
 
 #[pymethods]
 impl PyFieldSpec {
     #[new]
-    #[pyo3(signature = (name, offset, length, dtype, padding=None))]
+    #[pyo3(signature = (name, offset, length, dtype, padding=None, error_strategy=PyErrorStrategy::PushNull()))]
     pub fn new(
         name: String,
         offset: usize,
         length: usize,
         dtype: PyDType,
         padding: Option<u8>,
-    ) -> Self {
-        Self {
+        error_strategy: PyErrorStrategy,
+    ) -> PyResult<Self> {
+        validate_fill_strategy(&dtype, &error_strategy, length)?;
+        Ok(Self {
             name,
             offset,
             length,
             dtype,
             padding,
+            error_strategy,
+        })
+    }
+
+    #[setter]
+    pub fn set_length(&mut self, length: usize) -> PyResult<()> {
+        validate_fill_strategy(&self.dtype, &self.error_strategy, length)?;
+        self.length = length;
+        Ok(())
+    }
+
+    #[setter]
+    pub fn set_dtype(&mut self, dtype: PyDType) -> PyResult<()> {
+        validate_fill_strategy(&dtype, &self.error_strategy, self.length)?;
+        self.dtype = dtype;
+        Ok(())
+    }
+
+    #[setter]
+    pub fn set_error_strategy(&mut self, error_strategy: PyErrorStrategy) -> PyResult<()> {
+        validate_fill_strategy(&self.dtype, &error_strategy, self.length)?;
+        self.error_strategy = error_strategy;
+        Ok(())
+    }
+
+    #[getter]
+    pub fn get_error_strategy(&self) -> PyErrorStrategy {
+        self.error_strategy.clone()
+    }
+}
+
+fn validate_fill_strategy(
+    dtype: &PyDType,
+    strategy: &PyErrorStrategy,
+    length: usize,
+) -> PyResult<()> {
+    match strategy {
+        PyErrorStrategy::PushNull() => Ok(()),
+        PyErrorStrategy::Fill(bytes) => {
+            if bytes.len() > length {
+                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                    "Fill value length ({}) exceeds field length ({})",
+                    bytes.len(),
+                    length
+                )));
+            }
+            let core_dtype: core::DType = (*dtype).into();
+            let field = core::trim_ascii_spaces(bytes);
+            let valid = match core_dtype {
+                core::DType::I8 => lexical_core::parse::<i8>(field).is_ok(),
+                core::DType::I16 => lexical_core::parse::<i16>(field).is_ok(),
+                core::DType::I32 => lexical_core::parse::<i32>(field).is_ok(),
+                core::DType::I64 => lexical_core::parse::<i64>(field).is_ok(),
+                core::DType::U8 => lexical_core::parse::<u8>(field).is_ok(),
+                core::DType::U16 => lexical_core::parse::<u16>(field).is_ok(),
+                core::DType::U32 => lexical_core::parse::<u32>(field).is_ok(),
+                core::DType::U64 => lexical_core::parse::<u64>(field).is_ok(),
+                core::DType::F32 => lexical_core::parse::<f32>(field).is_ok(),
+                core::DType::F64 => lexical_core::parse::<f64>(field).is_ok(),
+                core::DType::String => std::str::from_utf8(field).is_ok(),
+            };
+            if !valid {
+                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                    "Cannot parse fill value {:?} as {:?}",
+                    bytes, dtype
+                )));
+            }
+            Ok(())
+        }
+    }
+}
+
+fn parse_fill_value(dtype: &PyDType, bytes: &[u8]) -> core::FillValue {
+    let core_dtype: core::DType = (*dtype).into();
+    let field = core::trim_ascii_spaces(bytes);
+    match core_dtype {
+        core::DType::I8 => core::FillValue::I8(lexical_core::parse::<i8>(field).unwrap()),
+        core::DType::I16 => core::FillValue::I16(lexical_core::parse::<i16>(field).unwrap()),
+        core::DType::I32 => core::FillValue::I32(lexical_core::parse::<i32>(field).unwrap()),
+        core::DType::I64 => core::FillValue::I64(lexical_core::parse::<i64>(field).unwrap()),
+        core::DType::U8 => core::FillValue::U8(lexical_core::parse::<u8>(field).unwrap()),
+        core::DType::U16 => core::FillValue::U16(lexical_core::parse::<u16>(field).unwrap()),
+        core::DType::U32 => core::FillValue::U32(lexical_core::parse::<u32>(field).unwrap()),
+        core::DType::U64 => core::FillValue::U64(lexical_core::parse::<u64>(field).unwrap()),
+        core::DType::F32 => core::FillValue::F32(lexical_core::parse::<f32>(field).unwrap()),
+        core::DType::F64 => core::FillValue::F64(lexical_core::parse::<f64>(field).unwrap()),
+        core::DType::String => {
+            core::FillValue::String(std::str::from_utf8(field).unwrap().to_string())
         }
     }
 }
@@ -115,12 +243,21 @@ impl PyFwfParser {
     ) -> Self {
         let core_specs = specs
             .into_iter()
-            .map(|s| core::FieldSpec {
-                name: s.name,
-                offset: s.offset,
-                length: s.length,
-                dtype: s.dtype.into(),
-                padding: s.padding,
+            .map(|s| {
+                let strategy = match s.error_strategy {
+                    PyErrorStrategy::PushNull() => core::ErrorStrategy::PushNull,
+                    PyErrorStrategy::Fill(ref bytes) => {
+                        core::ErrorStrategy::Fill(parse_fill_value(&s.dtype, bytes))
+                    }
+                };
+                core::FieldSpec {
+                    name: s.name,
+                    offset: s.offset,
+                    length: s.length,
+                    dtype: s.dtype.into(),
+                    padding: s.padding,
+                    error_strategy: strategy,
+                }
             })
             .collect();
         let mut inner = core::FwfParser::new(core_specs, line_length);
@@ -151,12 +288,21 @@ impl PyFwfParser {
     pub fn infer_chunk_size(specs: Vec<PyFieldSpec>) -> usize {
         let core_specs: Vec<core::FieldSpec> = specs
             .into_iter()
-            .map(|s| core::FieldSpec {
-                name: s.name,
-                offset: s.offset,
-                length: s.length,
-                dtype: s.dtype.into(),
-                padding: s.padding,
+            .map(|s| {
+                let strategy = match s.error_strategy {
+                    PyErrorStrategy::PushNull() => core::ErrorStrategy::PushNull,
+                    PyErrorStrategy::Fill(ref bytes) => {
+                        core::ErrorStrategy::Fill(parse_fill_value(&s.dtype, bytes))
+                    }
+                };
+                core::FieldSpec {
+                    name: s.name,
+                    offset: s.offset,
+                    length: s.length,
+                    dtype: s.dtype.into(),
+                    padding: s.padding,
+                    error_strategy: strategy,
+                }
             })
             .collect();
         core::FwfParser::infer_chunk_size(&core_specs)
@@ -202,12 +348,21 @@ impl PyFwfReader {
     ) -> PyResult<Self> {
         let core_specs = specs
             .into_iter()
-            .map(|s| core::FieldSpec {
-                name: s.name,
-                offset: s.offset,
-                length: s.length,
-                dtype: s.dtype.into(),
-                padding: s.padding,
+            .map(|s| {
+                let strategy = match s.error_strategy {
+                    PyErrorStrategy::PushNull() => core::ErrorStrategy::PushNull,
+                    PyErrorStrategy::Fill(ref bytes) => {
+                        core::ErrorStrategy::Fill(parse_fill_value(&s.dtype, bytes))
+                    }
+                };
+                core::FieldSpec {
+                    name: s.name,
+                    offset: s.offset,
+                    length: s.length,
+                    dtype: s.dtype.into(),
+                    padding: s.padding,
+                    error_strategy: strategy,
+                }
             })
             .collect();
         let inner = core::FwfReader::new(path, core_specs, line_length, parallel, chunk_size)
@@ -276,6 +431,7 @@ fn record_batch_to_capsule(py: Python, batch: RecordBatch) -> PyResult<PyObject>
 #[pymodule]
 fn _fwf(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyDType>()?;
+    m.add_class::<PyErrorStrategy>()?;
     m.add_class::<PyFieldSpec>()?;
     m.add_class::<PyFwfParser>()?;
     m.add_class::<PyFwfReader>()?;

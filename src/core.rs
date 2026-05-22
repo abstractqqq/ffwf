@@ -19,7 +19,7 @@ pub static WHITESPACE_LUT: [u8; 256] = {
     table
 };
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Clone, Copy)]
 pub enum DType {
     I8,
     I16,
@@ -66,22 +66,39 @@ impl DType {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
+pub enum FillValue {
+    I8(i8),
+    I16(i16),
+    I32(i32),
+    I64(i64),
+    U8(u8),
+    U16(u16),
+    U32(u32),
+    U64(u64),
+    F32(f32),
+    F64(f64),
+    String(String),
+}
+
+#[derive(Clone, PartialEq)]
+#[allow(dead_code)]
+pub enum ErrorStrategy {
+    PushNull,
+    Fill(FillValue),
+}
+
+#[derive(Clone)]
 pub struct FieldSpec {
     pub name: String,
     pub offset: usize,
     pub length: usize,
     pub dtype: DType,
     pub padding: Option<u8>,
+    pub error_strategy: ErrorStrategy,
 }
 
-#[derive(Debug, Clone, Copy)]
-#[allow(dead_code)]
-pub enum ErrorStrategy {
-    PushNull,
-}
-
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub enum Par {
     Seq,
     Fixed(usize),
@@ -93,7 +110,6 @@ pub struct FwfParser {
     pub schema: Arc<Schema>,
     pub chunk_size: usize,
     pub parallelism: Par,
-    pub error_strategy: ErrorStrategy,
 }
 
 impl FwfParser {
@@ -112,7 +128,6 @@ impl FwfParser {
             schema,
             chunk_size,
             parallelism: Par::Fixed(0),
-            error_strategy: ErrorStrategy::PushNull,
         }
     }
 
@@ -219,48 +234,114 @@ impl FwfParser {
                 let end = start + spec.length;
                 let field = trim_custom(&data[start..end], spec.padding);
 
-                match builder {
-                    ColumnBuilder::I8(b) => match lexical_core::parse::<i8>(field) {
+                match (builder, &spec.error_strategy) {
+                    (ColumnBuilder::I8(b), ErrorStrategy::Fill(FillValue::I8(fill))) => {
+                        match lexical_core::parse::<i8>(field) {
+                            Ok(v) => b.append_value(v),
+                            Err(_) => b.append_value(*fill),
+                        }
+                    }
+                    (ColumnBuilder::I8(b), _) => match lexical_core::parse::<i8>(field) {
                         Ok(v) => b.append_value(v),
                         Err(_) => b.append_null(),
                     },
-                    ColumnBuilder::I16(b) => match lexical_core::parse::<i16>(field) {
+                    (ColumnBuilder::I16(b), ErrorStrategy::Fill(FillValue::I16(fill))) => {
+                        match lexical_core::parse::<i16>(field) {
+                            Ok(v) => b.append_value(v),
+                            Err(_) => b.append_value(*fill),
+                        }
+                    }
+                    (ColumnBuilder::I16(b), _) => match lexical_core::parse::<i16>(field) {
                         Ok(v) => b.append_value(v),
                         Err(_) => b.append_null(),
                     },
-                    ColumnBuilder::I32(b) => match lexical_core::parse::<i32>(field) {
+                    (ColumnBuilder::I32(b), ErrorStrategy::Fill(FillValue::I32(fill))) => {
+                        match lexical_core::parse::<i32>(field) {
+                            Ok(v) => b.append_value(v),
+                            Err(_) => b.append_value(*fill),
+                        }
+                    }
+                    (ColumnBuilder::I32(b), _) => match lexical_core::parse::<i32>(field) {
                         Ok(v) => b.append_value(v),
                         Err(_) => b.append_null(),
                     },
-                    ColumnBuilder::I64(b) => match lexical_core::parse::<i64>(field) {
+                    (ColumnBuilder::I64(b), ErrorStrategy::Fill(FillValue::I64(fill))) => {
+                        match lexical_core::parse::<i64>(field) {
+                            Ok(v) => b.append_value(v),
+                            Err(_) => b.append_value(*fill),
+                        }
+                    }
+                    (ColumnBuilder::I64(b), _) => match lexical_core::parse::<i64>(field) {
                         Ok(v) => b.append_value(v),
                         Err(_) => b.append_null(),
                     },
-                    ColumnBuilder::U8(b) => match lexical_core::parse::<u8>(field) {
+                    (ColumnBuilder::U8(b), ErrorStrategy::Fill(FillValue::U8(fill))) => {
+                        match lexical_core::parse::<u8>(field) {
+                            Ok(v) => b.append_value(v),
+                            Err(_) => b.append_value(*fill),
+                        }
+                    }
+                    (ColumnBuilder::U8(b), _) => match lexical_core::parse::<u8>(field) {
                         Ok(v) => b.append_value(v),
                         Err(_) => b.append_null(),
                     },
-                    ColumnBuilder::U16(b) => match lexical_core::parse::<u16>(field) {
+                    (ColumnBuilder::U16(b), ErrorStrategy::Fill(FillValue::U16(fill))) => {
+                        match lexical_core::parse::<u16>(field) {
+                            Ok(v) => b.append_value(v),
+                            Err(_) => b.append_value(*fill),
+                        }
+                    }
+                    (ColumnBuilder::U16(b), _) => match lexical_core::parse::<u16>(field) {
                         Ok(v) => b.append_value(v),
                         Err(_) => b.append_null(),
                     },
-                    ColumnBuilder::U32(b) => match lexical_core::parse::<u32>(field) {
+                    (ColumnBuilder::U32(b), ErrorStrategy::Fill(FillValue::U32(fill))) => {
+                        match lexical_core::parse::<u32>(field) {
+                            Ok(v) => b.append_value(v),
+                            Err(_) => b.append_value(*fill),
+                        }
+                    }
+                    (ColumnBuilder::U32(b), _) => match lexical_core::parse::<u32>(field) {
                         Ok(v) => b.append_value(v),
                         Err(_) => b.append_null(),
                     },
-                    ColumnBuilder::U64(b) => match lexical_core::parse::<u64>(field) {
+                    (ColumnBuilder::U64(b), ErrorStrategy::Fill(FillValue::U64(fill))) => {
+                        match lexical_core::parse::<u64>(field) {
+                            Ok(v) => b.append_value(v),
+                            Err(_) => b.append_value(*fill),
+                        }
+                    }
+                    (ColumnBuilder::U64(b), _) => match lexical_core::parse::<u64>(field) {
                         Ok(v) => b.append_value(v),
                         Err(_) => b.append_null(),
                     },
-                    ColumnBuilder::F32(b) => match lexical_core::parse::<f32>(field) {
+                    (ColumnBuilder::F32(b), ErrorStrategy::Fill(FillValue::F32(fill))) => {
+                        match lexical_core::parse::<f32>(field) {
+                            Ok(v) => b.append_value(v),
+                            Err(_) => b.append_value(*fill),
+                        }
+                    }
+                    (ColumnBuilder::F32(b), _) => match lexical_core::parse::<f32>(field) {
                         Ok(v) => b.append_value(v),
                         Err(_) => b.append_null(),
                     },
-                    ColumnBuilder::F64(b) => match lexical_core::parse::<f64>(field) {
+                    (ColumnBuilder::F64(b), ErrorStrategy::Fill(FillValue::F64(fill))) => {
+                        match lexical_core::parse::<f64>(field) {
+                            Ok(v) => b.append_value(v),
+                            Err(_) => b.append_value(*fill),
+                        }
+                    }
+                    (ColumnBuilder::F64(b), _) => match lexical_core::parse::<f64>(field) {
                         Ok(v) => b.append_value(v),
                         Err(_) => b.append_null(),
                     },
-                    ColumnBuilder::String(b) => match std::str::from_utf8(field) {
+                    (ColumnBuilder::String(b), ErrorStrategy::Fill(FillValue::String(fill))) => {
+                        match std::str::from_utf8(field) {
+                            Ok(v) => b.append_value(v),
+                            Err(_) => b.append_value(fill),
+                        }
+                    }
+                    (ColumnBuilder::String(b), _) => match std::str::from_utf8(field) {
                         Ok(v) => b.append_value(v),
                         Err(_) => b.append_null(),
                     },

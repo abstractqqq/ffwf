@@ -7,7 +7,6 @@ import polars as pl
 import polars.testing as pl_testing
 
 import ffwf as fw
-import ffwf.polars as plfw
 
 
 def get_specs_and_widths():
@@ -147,13 +146,13 @@ def pure_reading_fn(filename, specs, widths, mode):
             c += w
         return pd.read_fwf(filename, colspecs=colspecs, header=None)
     elif mode == "eager_seq":
-        return plfw.read_fwf_pl(filename, specs, parallel=False)
+        return fw.read_fwf_pl(filename, specs, parallel=False)
     elif mode == "eager_par":
-        return plfw.read_fwf_pl(filename, specs, parallel=True)
+        return fw.read_fwf_pl(filename, specs, parallel=True)
     elif mode == "lazy_seq":
-        return plfw.scan_fwf_pl(filename, specs, parallel=False).collect()
+        return fw.scan_fwf_pl(filename, specs, parallel=False).collect()
     elif mode == "lazy_par":
-        return plfw.scan_fwf_pl(filename, specs, parallel=True).collect()
+        return fw.scan_fwf_pl(filename, specs, parallel=True).collect()
 
 
 def pipeline_fn(filename, specs, widths, mode):
@@ -174,21 +173,21 @@ def pipeline_fn(filename, specs, widths, mode):
         df = pure_reading_fn(filename, specs, widths, "pandas")
         return apply_pipeline(df)
     elif mode == "eager_seq":
-        df = plfw.read_fwf_pl(filename, specs, parallel=False)
+        df = fw.read_fwf_pl(filename, specs, parallel=False)
         return apply_pipeline(df)
     elif mode == "eager_par":
-        df = plfw.read_fwf_pl(filename, specs, parallel=True)
+        df = fw.read_fwf_pl(filename, specs, parallel=True)
         return apply_pipeline(df)
     elif mode == "lazy_seq":
         return (
-            plfw.scan_fwf_pl(filename, specs, parallel=False)
+            fw.scan_fwf_pl(filename, specs, parallel=False)
             .filter((pl.col("state") == "NY") & (pl.col("col_30") > 10**10))
             .select(["state", "col_30", "col_120"])
             .collect()
         )
     elif mode == "lazy_par":
         return (
-            plfw.scan_fwf_pl(filename, specs, parallel=True)
+            fw.scan_fwf_pl(filename, specs, parallel=True)
             .filter((pl.col("state") == "NY") & (pl.col("col_30") > 10**10))
             .select(["state", "col_30", "col_120"])
             .collect()
@@ -222,14 +221,14 @@ def aggregation_fn(filename, specs, widths, mode):
         df = pure_reading_fn(filename, specs, widths, "pandas")
         return apply_agg(df)
     elif mode == "eager_seq":
-        df = plfw.read_fwf_pl(filename, specs, parallel=False)
+        df = fw.read_fwf_pl(filename, specs, parallel=False)
         return apply_agg(df)
     elif mode == "eager_par":
-        df = plfw.read_fwf_pl(filename, specs, parallel=True)
+        df = fw.read_fwf_pl(filename, specs, parallel=True)
         return apply_agg(df)
     elif mode == "lazy_seq":
         return (
-            plfw.scan_fwf_pl(filename, specs, parallel=False)
+            fw.scan_fwf_pl(filename, specs, parallel=False)
             .filter(pl.col("col_30") > 10**10)
             .group_by("state")
             .agg(
@@ -242,7 +241,7 @@ def aggregation_fn(filename, specs, widths, mode):
         )
     elif mode == "lazy_par":
         return (
-            plfw.scan_fwf_pl(filename, specs, parallel=True)
+            fw.scan_fwf_pl(filename, specs, parallel=True)
             .filter(pl.col("col_30") > 10**10)
             .group_by("state")
             .agg(

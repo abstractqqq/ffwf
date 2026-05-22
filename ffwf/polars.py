@@ -2,11 +2,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Iterator, Sequence
 
+# Some functionalities work without requiring polars >= 1.34.
 import polars as pl
-
-if tuple(map(int, pl.__version__.split(".")[:2])) < (1, 34):
-    raise ImportError(f"ffwf.polars requires polars >= 1.34, found {pl.__version__}")
-
 import polars.selectors as cs
 from polars.io.plugins import register_io_source
 
@@ -192,9 +189,8 @@ def read_fwf_pl(
     Examples
     --------
     >>> import ffwf as fw
-    >>> import ffwf.polars as plfw
     >>> specs = [fw.FieldSpec("id", 0, 5, "int"), fw.FieldSpec("val", 5, 10, "f64")]
-    >>> df = plfw.read_fwf_pl("data.fwf", specs)
+    >>> df = fw.read_fwf_pl("data.fwf", specs)
     """
     newline_bytes = newline if isinstance(newline, bytes) else newline.encode("utf-8")
     stride, data_len = FwfParser.detect_line_length(path, newline_bytes)
@@ -264,9 +260,8 @@ def scan_fwf_pl(
     Examples
     --------
     >>> import ffwf as fw
-    >>> import ffwf.polars as plfw
     >>> specs = [fw.FieldSpec("id", 0, 5, "int")]
-    >>> lf = plfw.scan_fwf_pl("data.fwf", specs)
+    >>> lf = fw.scan_fwf_pl("data.fwf", specs)
     >>> df = lf.filter(pl.col("id") > 100).collect()
     """
     newline_bytes = newline if isinstance(newline, bytes) else newline.encode("utf-8")
@@ -660,9 +655,9 @@ def sink_fwf_pl(
     Examples
     --------
     >>> import polars as pl
-    >>> import ffwf.polars as plfw
+    >>> import ffwf as fw
     >>> lf = pl.LazyFrame({"a": range(1000000)})
-    >>> plfw.sink_fwf_pl(lf, "large.fwf", decimals=2)
+    >>> fw.sink_fwf_pl(lf, "large.fwf", decimals=2)
     """
     _check_supported_types(lf)
     bool_treatment = _validate_bool_treatment(bool_treatment)

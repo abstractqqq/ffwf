@@ -2,7 +2,6 @@ import polars as pl
 import pytest
 
 import ffwf as fw
-import ffwf.polars as plfw
 
 
 def test_fieldspec_width_validation_pl():
@@ -51,13 +50,13 @@ def test_write_capacity_warning_pl(tmp_path):
     specs = [fw.FieldSpec("a", 0, 12, "i32")]
 
     with pytest.warns(UserWarning, match="exceeds maximum capacity"):
-        plfw.write_fwf_pl(df, path, specs=specs)
+        fw.write_fwf_pl(df, path, specs=specs)
 
     # Inference that results in large width should also warn
     # I64 max is 20, let's make it 21
     df_large = pl.DataFrame({"a": [10**20]})  # This will trigger width >= 21
     with pytest.warns(UserWarning, match="exceeds maximum capacity"):
-        plfw.write_fwf_pl(df_large, path)
+        fw.write_fwf_pl(df_large, path)
 
 
 if __name__ == "__main__":
