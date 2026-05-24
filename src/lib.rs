@@ -4,7 +4,7 @@ use arrow_array::ffi::{FFI_ArrowArray, FFI_ArrowSchema};
 use arrow_array::{Array, RecordBatch, StructArray};
 use pyo3::prelude::*;
 
-#[pyclass(name = "DType", eq, eq_int)]
+#[pyclass(name = "DType", eq, eq_int, from_py_object)]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum PyDType {
     I8,
@@ -62,7 +62,7 @@ impl From<PyDType> for core::DType {
     }
 }
 
-#[pyclass(name = "ErrorStrategy", eq)]
+#[pyclass(name = "ErrorStrategy", eq, from_py_object)]
 #[derive(Clone, PartialEq)]
 pub enum PyErrorStrategy {
     PushNull(),
@@ -90,7 +90,7 @@ impl PyErrorStrategy {
     }
 }
 
-#[pyclass(name = "PyFieldSpec")]
+#[pyclass(name = "PyFieldSpec", from_py_object)]
 #[derive(Clone)]
 pub struct PyFieldSpec {
     /// The name of the field.
@@ -308,7 +308,7 @@ impl PyFwfParser {
         core::FwfParser::infer_chunk_size(&core_specs)
     }
 
-    pub fn parse(&self, py: Python, data: &[u8]) -> PyResult<Vec<PyObject>> {
+    pub fn parse<'py>(&self, py: Python<'py>, data: &[u8]) -> PyResult<Vec<Bound<'py, PyAny>>> {
         let batches = self.inner.parse(data);
         let mut py_batches = Vec::with_capacity(batches.len());
         for batch in batches {
@@ -317,7 +317,11 @@ impl PyFwfParser {
         Ok(py_batches)
     }
 
-    pub fn _parse_path(&self, py: Python, path: &str) -> PyResult<Vec<PyObject>> {
+    pub fn _parse_path<'py>(
+        &self,
+        py: Python<'py>,
+        path: &str,
+    ) -> PyResult<Vec<Bound<'py, PyAny>>> {
         let batches = self
             .inner
             .parse_path(path)
@@ -370,7 +374,7 @@ impl PyFwfReader {
         Ok(Self { inner })
     }
 
-    pub fn next_burst(&mut self, py: Python) -> PyResult<Vec<PyObject>> {
+    pub fn next_burst<'py>(&mut self, py: Python<'py>) -> PyResult<Vec<Bound<'py, PyAny>>> {
         let batches = self.inner.next_burst();
         let mut py_batches = Vec::with_capacity(batches.len());
         for batch in batches {
@@ -394,7 +398,10 @@ unsafe extern "C" fn schema_destructor(capsule: *mut pyo3::ffi::PyObject) {
     }
 }
 
-fn record_batch_to_capsule(py: Python, batch: RecordBatch) -> PyResult<PyObject> {
+fn record_batch_to_capsule<'py>(
+    py: Python<'py>,
+    batch: RecordBatch,
+) -> PyResult<Bound<'py, PyAny>> {
     let struct_array: StructArray = batch.into();
     let array_data = struct_array.to_data();
 
@@ -421,10 +428,13 @@ fn record_batch_to_capsule(py: Python, batch: RecordBatch) -> PyResult<PyObject>
             return Err(PyErr::fetch(py));
         }
 
-        let array_obj = PyObject::from_owned_ptr(py, array_capsule);
-        let schema_obj = PyObject::from_owned_ptr(py, schema_capsule);
+        let array_obj = Bound::from_owned_ptr(py, array_capsule);
+        let schema_obj = Bound::from_owned_ptr(py, schema_capsule);
 
-        Ok((array_obj, schema_obj).into_py(py))
+        Ok((array_obj, schema_obj)
+            .into_pyobject(py)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("{}", e)))?
+            .into_any())
     }
 }
 
