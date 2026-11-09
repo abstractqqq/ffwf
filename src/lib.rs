@@ -270,12 +270,14 @@ impl PyFwfParser {
         }
         if let Some(c) = chunk_size {
             inner.chunk_size = c;
+            inner.user_chunk_size = true;
         }
         Self { inner }
     }
 
     pub fn set_chunk_size(&mut self, chunk_size: usize) {
         self.inner.chunk_size = chunk_size;
+        self.inner.user_chunk_size = true;
     }
 
     #[staticmethod]
@@ -309,7 +311,7 @@ impl PyFwfParser {
     }
 
     pub fn parse<'py>(&self, py: Python<'py>, data: &[u8]) -> PyResult<Vec<Bound<'py, PyAny>>> {
-        let batches = self.inner.parse(data);
+        let batches = py.detach(|| self.inner.parse(data));
         let mut py_batches = Vec::with_capacity(batches.len());
         for batch in batches {
             py_batches.push(record_batch_to_capsule(py, batch)?);
@@ -322,9 +324,8 @@ impl PyFwfParser {
         py: Python<'py>,
         path: &str,
     ) -> PyResult<Vec<Bound<'py, PyAny>>> {
-        let batches = self
-            .inner
-            .parse_path(path)
+        let batches = py
+            .detach(|| self.inner.parse_path(path))
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("{e}")))?;
         let mut py_batches = Vec::with_capacity(batches.len());
         for batch in batches {
@@ -342,13 +343,14 @@ pub struct PyFwfReader {
 #[pymethods]
 impl PyFwfReader {
     #[new]
-    #[pyo3(signature = (path, specs, line_length, parallel=None, chunk_size=None))]
+    #[pyo3(signature = (path, specs, line_length, parallel=None, chunk_size=None, max_rows=None))]
     pub fn new(
         path: &str,
         specs: Vec<PyFieldSpec>,
         line_length: usize,
         parallel: Option<bool>,
         chunk_size: Option<usize>,
+        max_rows: Option<usize>,
     ) -> PyResult<Self> {
         let core_specs = specs
             .into_iter()
@@ -369,13 +371,14 @@ impl PyFwfReader {
                 }
             })
             .collect();
-        let inner = core::FwfReader::new(path, core_specs, line_length, parallel, chunk_size)
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("{e}")))?;
+        let inner =
+            core::FwfReader::new(path, core_specs, line_length, parallel, chunk_size, max_rows)
+                .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(format!("{e}")))?;
         Ok(Self { inner })
     }
 
     pub fn next_burst<'py>(&mut self, py: Python<'py>) -> PyResult<Vec<Bound<'py, PyAny>>> {
-        let batches = self.inner.next_burst();
+        let batches = py.detach(|| self.inner.next_burst());
         let mut py_batches = Vec::with_capacity(batches.len());
         for batch in batches {
             py_batches.push(record_batch_to_capsule(py, batch)?);

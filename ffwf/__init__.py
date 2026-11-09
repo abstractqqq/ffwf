@@ -4,8 +4,6 @@ import importlib.metadata
 import warnings
 from typing import TYPE_CHECKING, Sequence
 
-import pyarrow as pa
-
 from ._fwf import DType, ErrorStrategy, FwfParser, FwfReader, PyFieldSpec
 
 try:
@@ -14,6 +12,8 @@ except importlib.metadata.PackageNotFoundError:
     __version__ = "unknown"
 
 if TYPE_CHECKING:
+    import pyarrow as pa
+
     from ._fwf import PyFieldSpec as FieldSpec
 
 __all__ = [
@@ -174,6 +174,8 @@ def read_fwf_arrow(
     """
 
     # DType to arrow mapping helper
+    import pyarrow as pa
+
     def _dt_to_pa(dt):
         if dt == DType.I8:
             return pa.int8()
@@ -207,9 +209,10 @@ def read_fwf_arrow(
         return pa.Table.from_batches([], schema=schema)
 
     newline_bytes = newline if isinstance(newline, bytes) else newline.encode("utf-8")
-    stride, data_len = FwfParser.detect_line_length(path, newline_bytes)
-
-    actual_stride = line_length if line_length is not None else stride
+    if line_length is not None:
+        actual_stride = line_length
+    else:
+        actual_stride, _ = FwfParser.detect_line_length(path, newline_bytes)
     actual_data_len = actual_stride - len(newline_bytes)
 
     # Validate that all specs are within bounds

@@ -82,12 +82,32 @@ class FwfSource:
         pl.DataFrame
             A Polars DataFrame containing the parsed batch.
         """
+        need_post_select = False
+        if with_columns is not None:
+            spec_map = {s.name: s for s in self.specs}
+            active_specs = [spec_map[col] for col in with_columns if col in spec_map]
+            if predicate is not None:
+                active_names = set(with_columns)
+                for col in predicate.meta.root_names():
+                    if col in spec_map and col not in active_names:
+                        active_specs.append(spec_map[col])
+                        active_names.add(col)
+                        need_post_select = True
+            if not active_specs and self.specs:
+                active_specs = [self.specs[0]]
+                need_post_select = True
+        else:
+            active_specs = list(self.specs)
+
+        max_rows = n_rows if predicate is None else None
+
         reader = FwfReader(
             self.path,
-            list(self.specs),
+            active_specs,
             self.line_length,
             parallel=self.parallel,
-            chunk_size=batch_size or self.chunk_size,
+            chunk_size=self.chunk_size,
+            max_rows=max_rows,
         )
 
         count = 0
@@ -97,13 +117,13 @@ class FwfSource:
                 break
 
             for capsules in capsule_tuples:
-                df = pl.from_arrow(ArrowCapsule(capsules))
-
-                if with_columns:
-                    df = df.select(with_columns)
+                df = pl.DataFrame(ArrowCapsule(capsules))
 
                 if predicate is not None:
                     df = df.filter(predicate)
+
+                if need_post_select and with_columns is not None:
+                    df = df.select(with_columns)
 
                 if n_rows is not None:
                     remaining = n_rows - count
@@ -192,10 +212,16 @@ def read_fwf_pl(
     >>> specs = [fw.FieldSpec("id", 0, 5, "int"), fw.FieldSpec("val", 5, 10, "f64")]
     >>> df = fw.read_fwf_pl("data.fwf", specs)
     """
-    newline_bytes = newline if isinstance(newline, bytes) else newline.encode("utf-8")
-    stride, data_len = FwfParser.detect_line_length(path, newline_bytes)
+    import os
 
-    actual_stride = line_length if line_length is not None else stride
+    if os.path.exists(path) and os.path.getsize(path) == 0:
+        return pl.DataFrame(schema={s.name: _dtype_to_pl(s.dtype) for s in specs})
+
+    newline_bytes = newline if isinstance(newline, bytes) else newline.encode("utf-8")
+    if line_length is not None:
+        actual_stride = line_length
+    else:
+        actual_stride, _ = FwfParser.detect_line_length(path, newline_bytes)
     actual_data_len = actual_stride - len(newline_bytes)
 
     # Validate that all specs are within bounds
@@ -221,7 +247,7 @@ def read_fwf_pl(
         # Return empty frame with correct schema
         return pl.DataFrame(schema={s.name: _dtype_to_pl(s.dtype) for s in specs})
 
-    dfs = [pl.from_arrow(ArrowCapsule(c)) for c in capsule_tuples]
+    dfs = [pl.DataFrame(ArrowCapsule(c)) for c in capsule_tuples]
     return pl.concat(dfs, how="vertical")
 
 
@@ -264,12 +290,27 @@ def scan_fwf_pl(
     >>> lf = fw.scan_fwf_pl("data.fwf", specs)
     >>> df = lf.filter(pl.col("id") > 100).collect()
     """
-    newline_bytes = newline if isinstance(newline, bytes) else newline.encode("utf-8")
+    import os
 
-    if line_length is None:
+    newline_bytes = newline if isinstance(newline, bytes) else newline.encode("utf-8")
+    schema = pl.Schema({s.name: _dtype_to_pl(s.dtype) for s in specs})
+
+    if os.path.exists(path) and os.path.getsize(path) == 0:
+        if line_length is None:
+            line_length = (
+                max((s.offset + s.length for s in specs), default=1)
+                + len(newline_bytes)
+            )
+    elif line_length is None:
         line_length, _ = FwfParser.detect_line_length(path, newline_bytes)
 
-    schema = pl.Schema({s.name: _dtype_to_pl(s.dtype) for s in specs})
+    actual_data_len = line_length - len(newline_bytes)
+    for s in specs:
+        if s.offset + s.length > actual_data_len:
+            raise ValueError(
+                f"FieldSpec '{s.name}' (offset={s.offset}, length={s.length}) "
+                f"exceeds data length ({actual_data_len})."
+            )
 
     return register_io_source(
         io_source=FwfSource(path, specs, line_length, chunk_size, parallel),
@@ -411,18 +452,57 @@ def _infer_specs(
             length = max(len(s) for s in bool_treatment)
             out_dtype = DType.String
         elif dtype.is_integer():
-            length = stats[col_name][0] or 0
+            length = max(stats[col_name][0] or 1, 1)
             out_dtype = dtype_map.get(dtype.base_type(), DType.I32)
         elif dtype.is_float():
-            length = stats[col_name][0] or 0
+            length = max(stats[col_name][0] or 1, 1)
             out_dtype = dtype_map.get(dtype.base_type(), DType.F64)
         else:
-            length = stats[col_name][0] or 0
+            length = max(stats[col_name][0] or 1, 1)
             out_dtype = DType.String
 
         final_specs.append(FieldSpec(col_name, offset, length, out_dtype))
         offset += length
     return final_specs
+
+
+def _format_col_expr(
+    spec: PyFieldSpec,
+    dtype: pl.DataType,
+    decimals: int,
+    bool_treatment: tuple[str, str, str],
+) -> pl.Expr:
+    col = pl.col(spec.name)
+    if dtype == pl.Boolean:
+        return (
+            pl.when(col.is_null())
+            .then(pl.lit(bool_treatment[2]))
+            .when(col)
+            .then(pl.lit(bool_treatment[0]))
+            .otherwise(pl.lit(bool_treatment[1]))
+        )
+    if dtype.is_float():
+        return col.round(decimals).cast(pl.String).fill_null("")
+    if dtype == pl.String:
+        return col.str.replace_many(['"', "'"], [""]).fill_null("")
+    if isinstance(dtype, (pl.Categorical, pl.Enum)):
+        return col.cast(pl.String).str.replace_many(['"', "'"], [""]).fill_null("")
+    return col.cast(pl.String).fill_null("")
+
+
+def _pad_col_expr(
+    col: pl.Expr,
+    spec: PyFieldSpec,
+    dtype: pl.DataType,
+    number_padding: str,
+    str_padding: str,
+    pad_str_end: bool,
+) -> pl.Expr:
+    if dtype.is_integer() or dtype.is_float():
+        return col.str.pad_start(spec.length, number_padding)
+    if pad_str_end:
+        return col.str.pad_end(spec.length, str_padding)
+    return col.str.pad_start(spec.length, str_padding)
 
 
 def _validate_and_format_batch(
@@ -438,56 +518,52 @@ def _validate_and_format_batch(
     """
     Transform and validate a single batch of data for FWF writing.
     """
-    exprs = []
-    for spec in specs:
-        col = pl.col(spec.name)
-        dtype = df.schema[spec.name]
-
-        if dtype == pl.Boolean:
-            col = (
-                pl.when(col.is_null())
-                .then(pl.lit(bool_treatment[2]))
-                .when(col)
-                .then(pl.lit(bool_treatment[0]))
-                .otherwise(pl.lit(bool_treatment[1]))
+    schema = df.schema
+    if skip_width_check:
+        final_exprs = [
+            _pad_col_expr(
+                _format_col_expr(spec, schema[spec.name], decimals, bool_treatment),
+                spec,
+                schema[spec.name],
+                number_padding,
+                str_padding,
+                pad_str_end,
             )
-        elif dtype.is_float():
-            col = col.round(decimals)
-        elif dtype == pl.String or isinstance(dtype, (pl.Categorical, pl.Enum)):
-            # Strip quotes
-            col = col.cast(pl.String).str.replace_all(r"[\"']", "")
+            for spec in specs
+        ]
+        return df.select(pl.concat_str(final_exprs).alias("raw_line"))
 
-        col = col.cast(pl.String).fill_null("")
-        exprs.append(col.alias(f"_tmp_{spec.name}"))
-
+    exprs = [
+        _format_col_expr(spec, schema[spec.name], decimals, bool_treatment).alias(
+            f"_tmp_{spec.name}"
+        )
+        for spec in specs
+    ]
     temp_df = df.select(exprs)
 
-    # Validate lengths in parallel if not skipped
-    if not skip_width_check:
-        max_lens = temp_df.select(pl.all().str.len_bytes().max()).row(0)
+    max_lens = temp_df.select(pl.all().str.len_bytes().max()).row(0)
 
-        violations = [
-            f"Column '{s.name}' has data longer ({max_len or 0}) than specified length ({s.length})"
-            for s, max_len in zip(specs, max_lens)
-            if (max_len or 0) > s.length
-        ]
+    violations = [
+        f"Column '{s.name}' has data longer ({max_len or 0}) than specified length ({s.length})"
+        for s, max_len in zip(specs, max_lens)
+        if (max_len or 0) > s.length
+    ]
 
-        if violations:
-            raise ValueError("\n".join(violations))
+    if violations:
+        raise ValueError("\n".join(violations))
 
     # Pad and Concat
-    final_exprs = []
-    for spec in specs:
-        col = pl.col(f"_tmp_{spec.name}")
-        dtype = df.schema[spec.name]
-        if dtype.is_integer() or dtype.is_float():
-            col = col.str.pad_start(spec.length, number_padding)
-        else:
-            if pad_str_end:
-                col = col.str.pad_end(spec.length, str_padding)
-            else:
-                col = col.str.pad_start(spec.length, str_padding)
-        final_exprs.append(col)
+    final_exprs = [
+        _pad_col_expr(
+            pl.col(f"_tmp_{spec.name}"),
+            spec,
+            schema[spec.name],
+            number_padding,
+            str_padding,
+            pad_str_end,
+        )
+        for spec in specs
+    ]
 
     return temp_df.select(pl.concat_str(final_exprs).alias("raw_line"))
 
@@ -578,10 +654,10 @@ def write_fwf_pl(
             df = df.select(target_cols)
         final_specs = specs
     else:
-        final_specs = _infer_specs(df, bool_treatment, decimals)
-        _check_specs_capacity(final_specs)
         if isinstance(df, pl.LazyFrame):
             df = df.collect()
+        final_specs = _infer_specs(df, bool_treatment, decimals)
+        _check_specs_capacity(final_specs)
         skip_width_check = True
 
     batch_out = _validate_and_format_batch(
@@ -675,6 +751,24 @@ def sink_fwf_pl(
         _check_specs_capacity(final_specs)
         skip_width_check = True
 
+    schema = lf.collect_schema()
+    if skip_width_check:
+        final_exprs = [
+            _pad_col_expr(
+                _format_col_expr(spec, schema[spec.name], decimals, bool_treatment),
+                spec,
+                schema[spec.name],
+                number_padding,
+                str_padding,
+                pad_str_end,
+            )
+            for spec in final_specs
+        ]
+        lf.select(pl.concat_str(final_exprs).alias("raw_line")).sink_csv(
+            path, include_header=False, quote_style="never", line_terminator="\n"
+        )
+        return _build_spec_map(final_specs, schema, simple_dtypes)
+
     current_row = 0
     with open(path, "wb") as f:
         for i, batch in enumerate(lf.collect_batches()):
@@ -699,4 +793,4 @@ def sink_fwf_pl(
             )
             current_row += len(batch)
 
-    return _build_spec_map(final_specs, lf.collect_schema(), simple_dtypes)
+    return _build_spec_map(final_specs, schema, simple_dtypes)

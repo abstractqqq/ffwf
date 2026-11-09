@@ -5,7 +5,7 @@ build-backend = "maturin"
 [project]
 name = "ffwf"
 version = "0.2.0"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 dependencies = [
     "pyarrow>=13",
 ]
@@ -15,7 +15,7 @@ polars = ["polars>=1.34"]
 pandas = ["pandas"]
 all = ["polars>=1.34", "pandas"]
 dev = [
-    "pandas==2.2.3",
+    "pandas>=2.2.3",
     "matplotlib",
     "pytest",
     "ffwf[all]",

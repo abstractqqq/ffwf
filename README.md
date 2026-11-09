@@ -118,9 +118,9 @@ The following benchmarks compare `ffwf` against `pandas.read_fwf` (v2.2.3) using
 | :--- | :--- | :--- | :--- |
 | **Pandas** | 16.06s | 16.16s | 16.79s |
 | **ffwf (Seq)** | 0.51s | 0.51s | 0.51s |
-| **ffwf (Par)** | **0.09s** | **0.08s** | **0.08s** |
+| **ffwf (Par)** | **0.08s** | **0.01s** | **0.01s** |
 
-*Benchmarks conducted on a 16-core machine. ffwf is **~170x faster** than Pandas for pure reading and **~200x faster** for filtered pipelines.*
+*Benchmarks conducted on a 16-core machine. ffwf is **~200x faster** than Pandas for pure reading and **~1,500x faster** for filtered/projected pipelines and aggregations via column pushdown.*
 
 ### Visualization
 
